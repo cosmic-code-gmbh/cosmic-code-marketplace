@@ -646,7 +646,7 @@ export const register: Register = on => {
         {allDecisions.map(d => item('◇', d.text, inner, false, 'warning'))}
         {allDecisions.length > 0 && <Text> </Text>}
 
-        {allTodos.length > 0 && <Box width={inner}>{header('Todos', `${doneCount}/${allTodos.length}`, doneCount === allTodos.length ? 'success' : undefined)}</Box>}
+        {allTodos.length > 0 && <Box width={inner} marginBottom={1}>{header('Todos', `${doneCount}/${allTodos.length}`, doneCount === allTodos.length ? 'success' : undefined)}</Box>}
         {allTodos.length > 0 && (
           <Box flexDirection="row" justifyContent="space-between" width={inner}>
             {progress(doneCount, allTodos.length)}
