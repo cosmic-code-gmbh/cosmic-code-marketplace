@@ -1,8 +1,8 @@
 {
   "name": "fokusboard",
   "displayName": "Fokusboard",
-  "version": "0.1.2",
-  "description": "Side pane with a summary of the current topic, open decisions and todos, kept up to date by Claude (built on sirkitree/pinboard, MIT)",
+  "version": "0.2.0",
+  "description": "Side pane with the current topic, plan workflow status (Plan → Review → Einarbeiten → Umsetzen → Verify), artifacts, open decisions and todos (built on sirkitree/pinboard, MIT)",
   "author": {
     "name": "Marcus Thor"
   },
