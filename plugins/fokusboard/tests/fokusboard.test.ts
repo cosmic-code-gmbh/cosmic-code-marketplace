@@ -169,19 +169,23 @@ describe('session', () => {
       if (surface === 'terminal') expect(all).toContain('◎')
       else expect((await ui.find({ type: 'Svg' }))?.props.alt).toBe('Thema')
       expect((await ui.find({ type: 'Text', text: 'Payment v3' }))?.props.bold).toBe(true)
-      expect(all).toContain('Worum es geht')
+      expect(all).toContain('WORUM ES GEHT')
       expect(all).toContain('Checkout und Webhooks für Stripe produktionsreif machen.')
       // The anchor comes before the current step
-      expect(all.indexOf('Payment v3 fertigstellen')).toBeLessThan(all.indexOf('Aktuell'))
+      expect(all.indexOf('Payment v3 fertigstellen')).toBeLessThan(all.indexOf('AKTUELL'))
       expect(all).toContain('Checkout läuft, Rückgabeseite fertig.')
       expect(all).toContain('Stripe Sandbox')
       expect(all).toContain('◇')
       expect(all).toContain('Staging zuerst?')
       expect(all).toContain('Deploy')
       expect(all).toContain('✓ 1 erledigt')
+      expect(all).toContain('TODOS')
+      expect(all).toContain('1/2')
+      expect(all).toContain('▰▰▰▰▰')
+      expect(all).toContain('WORUM ES GEHT')
       expect(all).not.toContain('Webhook testen')
       // No plan tracked and not in plan mode: no workflow section
-      expect(all).not.toContain('Plan-Workflow')
+      expect(all).not.toContain('PLAN-WORKFLOW')
       await ui.unmount()
     }
     const { sections } = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] })
@@ -202,12 +206,12 @@ describe('session', () => {
     for (const surface of SURFACES) {
       const ui = await $.ui.mount({ ...PANE, surface })
       const all = await texts(ui)
-      expect(all).toContain('Plan-Workflow')
+      expect(all).toContain('PLAN-WORKFLOW')
       expect(all).toContain('stripe')
       expect(all).toContain('◉ Einarb.')
       expect(all).toContain('Review #2 einarbeiten')
       expect(all).toContain('#2 offen')
-      expect(all).toContain('Artefakte')
+      expect(all).toContain('ARTEFAKTE')
       expect((await ui.findAll({ type: 'Link' })).map(l => [l.props.label, l.props.href])).toContainEqual(['Checkout-Mockup', 'https://claude.ai/artifact/abc'])
       const hrefs = (await ui.findAll({ type: 'Link' })).map(l => l.props.href)
       const buttons = (await ui.findAll({ type: 'Button' })).map(b => b.props.label)
@@ -252,7 +256,11 @@ describe('session', () => {
 
   test('the empty pane invites a topic', async $ => {
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    expect(await texts(ui)).toContain('Noch kein Thema')
+    const all = await texts(ui)
+    expect(all).toContain('Noch kein Thema')
+    // Empty decisions and todos collapse into one quiet line
+    expect(all).toContain('Keine offenen Entscheidungen, keine Todos.')
+    expect(all).not.toContain('TODOS')
   })
 
   test('the clear button drops finished todos', async ($, on) => {

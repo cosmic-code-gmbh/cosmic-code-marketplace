@@ -440,11 +440,23 @@ export const register: Register = on => {
     const codeEdit = await read($, lastCodeEditAt)
     const doneCount = allTodos.filter(t => t.isDone).length
 
+    // One label style for every section: dim uppercase, the count beside it in the section's colour
     const header = (title: string, count: string, color?: string) => (
-      <Text bold color={color}>
-        {title} <Text dimColor>{count}</Text>
+      <Text dimColor bold>
+        {title.toUpperCase()}
+        {count && <Text color={color}>{'  ' + count}</Text>}
       </Text>
     )
+    // A ten-cell bar of finished todos
+    const progress = (done: number, total: number) => {
+      const full = total ? Math.round((done / total) * 10) : 0
+      return (
+        <Text>
+          <Text color="success">{'▰'.repeat(full)}</Text>
+          <Text dimColor>{'▱'.repeat(10 - full)}</Text>
+        </Text>
+      )
+    }
     const empty = (text: string) => <Text dimColor>  {text}</Text>
     // The bullet sits in a fixed column at the top of its row, so wrapped lines indent under the text
     const item = (bullet: string, text: string, width: number, isDim = false, color?: string) => (
@@ -463,8 +475,8 @@ export const register: Register = on => {
     // The topic card: a rounded frame in the accent colour, so it reads as the headline of the pane
     const card = inner - 4
     const topicCard = tp ? (
-      <Box flexDirection="column" width={inner} borderStyle="round" borderColor="claude" paddingX={1}>
-        <Text dimColor>Aktuell</Text>
+      <Box flexDirection="column" width={inner} borderStyle="round" borderColor="claude" borderDimColor paddingX={1}>
+        {header('Aktuell', '')}
         <Box flexDirection="row" alignItems="flex-start" width={card}>
           <Box width={2} flexShrink={0}>
             {Svg ? <Svg source={FOCUS_ICON} alt="Thema" width={15} height={15} /> : <Text color="claude">◎</Text>}
@@ -478,11 +490,13 @@ export const register: Register = on => {
         <Box width={card}>
           <Text wrap="wrap">{tp.summary}</Text>
         </Box>
-        {tp.points.length > 0 && <Text> </Text>}
+        {tp.points.length > 0 && <Box height={1} />}
         {tp.points.map(p => (
           <Box flexDirection="row" alignItems="flex-start" width={card}>
             <Box width={2} flexShrink={0}>
-              <Text color="claude">›</Text>
+              <Text color="claude" dimColor>
+                ·
+              </Text>
             </Box>
             <Box flexShrink={1} flexGrow={1}>
               <Text dimColor wrap="wrap">
@@ -492,7 +506,7 @@ export const register: Register = on => {
           </Box>
         ))}
       </Box>
-    ) : (
+    ) : th ? null : (
       <Box width={inner} borderStyle="round" borderDimColor paddingX={1}>
         <Text dimColor>Noch kein Thema. Claude setzt es, sobald das Gespräch eins hat.</Text>
       </Box>
@@ -501,7 +515,7 @@ export const register: Register = on => {
     // The anchor of the conversation: what it is about overall, read before the current step
     const threadBlock = th ? (
       <Box flexDirection="column" width={inner} marginBottom={1}>
-        <Text dimColor>Worum es geht</Text>
+        {header('Worum es geht', '')}
         <Text bold wrap="wrap">
           {th.title}
         </Text>
@@ -588,7 +602,7 @@ export const register: Register = on => {
       <Box flexDirection="column" width={inner + 2} padding={1}>
         {threadBlock}
         {topicCard}
-        <Text> </Text>
+        {(th || tp) && <Text> </Text>}
 
         {showWorkflow && (
           <Box flexDirection="row" justifyContent="space-between" width={inner}>
@@ -621,28 +635,34 @@ export const register: Register = on => {
         ))}
         {allArtifacts.length > 0 && <Text> </Text>}
 
-        {header('Offene Entscheidungen', allDecisions.length ? String(allDecisions.length) : '', allDecisions.length ? 'warning' : undefined)}
-        {allDecisions.length === 0 && empty('Nichts offen.')}
+        {allDecisions.length > 0 && header('Offene Entscheidungen', String(allDecisions.length), 'warning')}
         {allDecisions.map(d => item('◇', d.text, inner, false, 'warning'))}
-        <Text> </Text>
+        {allDecisions.length > 0 && <Text> </Text>}
 
-        <Box flexDirection="row" justifyContent="space-between" width={inner}>
-          {header('Todos', allTodos.length ? `${doneCount}/${allTodos.length}` : '')}
-          {doneCount > 0 && (
-            <Button
-              key="clear-done"
-              label="erledigte weg"
-              hotkey="c"
-              plain
-              dimColor
-              onPress={() => update($, todos, list => list.filter(t => !t.isDone))}
-            />
-          )}
-        </Box>
-        {allTodos.length === 0 && empty('Noch keine Todos.')}
+        {allTodos.length > 0 && (
+          <Box flexDirection="row" justifyContent="space-between" width={inner}>
+            <Text>
+              {header('Todos', `${doneCount}/${allTodos.length}`, doneCount === allTodos.length ? 'success' : undefined)}
+              {'  '}
+              {progress(doneCount, allTodos.length)}
+            </Text>
+            {doneCount > 0 && (
+              <Button
+                key="clear-done"
+                label="erledigte weg"
+                hotkey="c"
+                plain
+                dimColor
+                onPress={() => update($, todos, list => list.filter(t => !t.isDone))}
+              />
+            )}
+          </Box>
+        )}
         {allTodos.filter(t => !t.isDone).map(t => (t.isActive ? item('▸', t.text, inner, false, 'warning') : item('○', t.text, inner)))}
         {/* Finished todos fold into one line so open work stays on top */}
         {doneCount > 0 && <Text color="success">{`  ✓ ${doneCount} erledigt`}</Text>}
+
+        {allDecisions.length + allTodos.length === 0 && <Text dimColor>✓ Keine offenen Entscheidungen, keine Todos.</Text>}
       </Box>
     )
   })
