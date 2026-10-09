@@ -1,8 +1,8 @@
 {
   "name": "cosmic-code-marketplace",
   "owner": {
-    "name": "Marcus Thor",
-    "email": "your.email@example.com"
+    "name": "Cosmic Code GmbH",
+    "url": "https://github.com/cosmic-code-gmbh"
   },
   "plugins": [
     {
@@ -55,5 +55,6 @@
       "source": "./plugins/fokusboard",
       "description": "Side pane with the current topic, open decisions and todos (Claude Code mod)"
     }
-  ]
+  ],
+  "description": "Claude-Code-Plugins und Mods der Cosmic Code GmbH"
 }

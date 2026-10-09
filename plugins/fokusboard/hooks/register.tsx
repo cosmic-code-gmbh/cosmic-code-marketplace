@@ -196,10 +196,12 @@ export const register: Register = on => {
       </Text>
     )
     const empty = (text: string) => <Text dimColor>  {text}</Text>
-    // The bullet stays in its own column, so wrapped lines indent under the text
+    // The bullet sits in a fixed column at the top of its row, so wrapped lines indent under the text
     const item = (bullet: string, text: string, width: number, isDim = false, color?: string) => (
-      <Box flexDirection="row" width={width}>
-        <Text dimColor={isDim} color={color}>{'  ' + bullet + ' '}</Text>
+      <Box flexDirection="row" alignItems="flex-start" width={width}>
+        <Box width={4} flexShrink={0}>
+          <Text dimColor={isDim} color={color}>{'  ' + bullet}</Text>
+        </Box>
         <Box flexShrink={1} flexGrow={1}>
           <Text dimColor={isDim} color={color} wrap="wrap">
             {text}
@@ -220,8 +222,10 @@ export const register: Register = on => {
         </Box>
         {tp.points.length > 0 && <Text> </Text>}
         {tp.points.map(p => (
-          <Box flexDirection="row" width={card}>
-            <Text color="claude">{'› '}</Text>
+          <Box flexDirection="row" alignItems="flex-start" width={card}>
+            <Box width={2} flexShrink={0}>
+              <Text color="claude">›</Text>
+            </Box>
             <Box flexShrink={1} flexGrow={1}>
               <Text dimColor wrap="wrap">
                 {p}
@@ -243,7 +247,7 @@ export const register: Register = on => {
 
         {header('Offene Entscheidungen', allDecisions.length ? String(allDecisions.length) : '', allDecisions.length ? 'warning' : undefined)}
         {allDecisions.length === 0 && empty('Nichts offen.')}
-        {allDecisions.map(d => item('?', d.text, inner, false, 'warning'))}
+        {allDecisions.map(d => item('◇', d.text, inner, false, 'warning'))}
         <Text> </Text>
 
         <Box flexDirection="row" justifyContent="space-between" width={inner}>

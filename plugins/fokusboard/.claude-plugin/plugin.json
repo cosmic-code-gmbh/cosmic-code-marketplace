@@ -1,10 +1,18 @@
 {
   "name": "fokusboard",
   "displayName": "Fokusboard",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Side pane with a summary of the current topic, open decisions and todos, kept up to date by Claude (built on sirkitree/pinboard, MIT)",
-  "author": { "name": "Marcus Thor" },
+  "author": {
+    "name": "Marcus Thor"
+  },
   "license": "MIT",
-  "keywords": ["claude-code-mod", "pane", "todos", "decisions", "summary"],
+  "keywords": [
+    "claude-code-mod",
+    "pane",
+    "todos",
+    "decisions",
+    "summary"
+  ],
   "types": "./types/index.d.ts"
 }
