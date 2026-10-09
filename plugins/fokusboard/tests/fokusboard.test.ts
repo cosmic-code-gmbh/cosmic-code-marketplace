@@ -154,7 +154,8 @@ describe('session', () => {
     for (const surface of SURFACES) {
       const ui = await $.ui.mount({ ...PANE, surface })
       const all = await texts(ui)
-      expect(all).toContain('◆︎')
+      if (surface === 'terminal') expect(all).toContain('◎')
+      else expect((await ui.find({ type: 'Svg' }))?.props.alt).toBe('Thema')
       expect((await ui.find({ type: 'Text', text: 'Payment v3' }))?.props.bold).toBe(true)
       expect(all).toContain('Checkout läuft, Rückgabeseite fertig.')
       expect(all).toContain('Stripe Sandbox')

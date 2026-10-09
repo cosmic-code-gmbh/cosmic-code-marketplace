@@ -295,6 +295,12 @@ export function summarize(change: Update): string {
   return 'Fokusboard: ' + (parts.join(', ') || 'no change')
 }
 
+// A focus target for the title of the topic card; the desktop draws SVG as an image, so the accent is a hex, not a theme key
+const FOCUS_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">' +
+  '<circle cx="12" cy="12" r="8.75" stroke="#D97757" stroke-width="2.5"/>' +
+  '<circle cx="12" cy="12" r="3.75" fill="#D97757"/></svg>'
+
 const open = ($: EngineInterface) => $.ui.open({ id: PANE, title: TITLE })
 
 // Opens a plan file in the Mac's default app for Markdown
@@ -398,7 +404,10 @@ export const register: Register = on => {
   )
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button, Link } = $.ui.resolve(e)
+    const elements = $.ui.resolve(e)
+    const { Box, Text, Button, Link } = elements
+    // The remote surfaces draw vector icons; the terminal has no Svg and gets a glyph
+    const Svg = e.surface !== 'terminal' && 'Svg' in elements ? elements.Svg : undefined
     // One cell of padding on every side
     const inner = Math.max(10, e.props.bodyColumns - 2)
     const { topic: tp, todos: allTodos, decisions: allDecisions, artifacts: allArtifacts } = await readBoard($)
@@ -431,10 +440,9 @@ export const register: Register = on => {
     const card = inner - 4
     const topicCard = tp ? (
       <Box flexDirection="column" width={inner} borderStyle="round" borderColor="claude" paddingX={1}>
-        {/* U+FE0E keeps the diamond a text glyph; the desktop font would otherwise draw it as a larger emoji */}
         <Box flexDirection="row" alignItems="flex-start" width={card}>
           <Box width={2} flexShrink={0}>
-            <Text color="claude">{'◆︎'}</Text>
+            {Svg ? <Svg source={FOCUS_ICON} alt="Thema" width={15} height={15} /> : <Text color="claude">◎</Text>}
           </Box>
           <Box flexShrink={1} flexGrow={1}>
             <Text bold color="claude" wrap="wrap">
