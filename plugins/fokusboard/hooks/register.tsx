@@ -632,7 +632,7 @@ export const register: Register = on => {
         {(th || tp) && <Text> </Text>}
 
         {showWorkflow && (
-          <Box flexDirection="row" justifyContent="space-between" width={inner}>
+          <Box flexDirection="row" justifyContent="space-between" width={inner} marginBottom={1}>
             {header('Plan-Workflow', status.length ? String(status.length) : '')}
             <Text> </Text>
             {isPlanMode ? (
@@ -648,7 +648,7 @@ export const register: Register = on => {
         {sorted.map(planBlock)}
         {showWorkflow && status.length > 0 && <Text> </Text>}
 
-        {allArtifacts.length > 0 && <Box width={inner}>{header('Artefakte', String(allArtifacts.length))}</Box>}
+        {allArtifacts.length > 0 && <Box width={inner} marginBottom={1}>{header('Artefakte', String(allArtifacts.length))}</Box>}
         {allArtifacts.map(a => (
           <Box flexDirection="row" alignItems="flex-start" width={inner}>
             <Box width={4} flexShrink={0}>
@@ -663,13 +663,12 @@ export const register: Register = on => {
         ))}
         {allArtifacts.length > 0 && <Text> </Text>}
 
-        {allDecisions.length > 0 && <Box width={inner}>{header('Offene Entscheidungen', String(allDecisions.length), 'warning')}</Box>}
+        {allDecisions.length > 0 && <Box width={inner} marginBottom={1}>{header('Offene Entscheidungen', String(allDecisions.length), 'warning')}</Box>}
         {allDecisions.length > 1 && (
           <Box width={inner} marginBottom={1}>
             <Button key="ask-all" label="Alle Fragen stellen" hotkey="a" plain onPress={() => askAbout($, allDecisions)} />
           </Box>
         )}
-        {allDecisions.length === 1 && <Box height={1} />}
         {allDecisions.map(d => (
           <Box flexDirection="column" width={inner} marginBottom={1}>
             {item('◇', d.text, inner, false, 'warning')}
