@@ -254,6 +254,55 @@ describe('session', () => {
     expect(all).toContain('Wir planen gerade')
   })
 
+  test('reply puts the question in the prompt box; ask has Claude put it to the person', async ($, on) => {
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    const filled: string[] = []
+    const sent: string[] = []
+    on('prompt.read', () => ({ value: { text: '', cursor: 0 } }))
+    on('prompt.fill', (_$: unknown, e: { text: string }) => {
+      filled.push(e.text)
+      return { isFilled: true }
+    })
+    on('prompt.submit', (_$: unknown, e: { text: string }) => {
+      sent.push(e.text)
+      return { text: e.text }
+    })
+    on('ui.toast', () => ({ value: undefined }))
+    await $.tool.call({ tool: TOOL, open_decisions: ['Staging zuerst?', 'Welcher Editor?'] })
+    for (const surface of SURFACES) {
+      const ui = await $.ui.mount({ ...PANE, surface })
+      const buttons = (await ui.findAll({ type: 'Button' })).map(b => b.props.label)
+      expect(buttons).toContain('↩ Antworten')
+      expect(buttons).toContain('? Frag mich')
+      expect(buttons).toContain('Alle Fragen stellen')
+      await ui.unmount()
+    }
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'reply:d1' })
+    expect(filled).toEqual(['Zu „Staging zuerst?“: '])
+    await ui.press({ key: 'ask:d2' })
+    expect(sent.at(-1)).toContain('d2: Welcher Editor?')
+    expect(sent.at(-1)).toContain('AskUserQuestion')
+    await ui.press({ key: 'ask-all' })
+    expect(sent.at(-1)).toContain('d1: Staging zuerst?\nd2: Welcher Editor?')
+  })
+
+  test('where the box cannot take the reply, Claude asks instead', async ($, on) => {
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    const sent: string[] = []
+    on('prompt.read', () => ({ value: { text: '', cursor: 0 } }))
+    on('prompt.fill', () => ({ isFilled: false, cause: 'no_composer' }))
+    on('prompt.submit', (_$: unknown, e: { text: string }) => {
+      sent.push(e.text)
+      return { text: e.text }
+    })
+    on('ui.toast', () => ({ value: undefined }))
+    await $.tool.call({ tool: TOOL, open_decisions: ['Staging zuerst?'] })
+    const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+    await ui.press({ key: 'reply:d1' })
+    expect(sent.at(-1)).toContain('d1: Staging zuerst?')
+  })
+
   test('the empty pane invites a topic', async $ => {
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     const all = await texts(ui)

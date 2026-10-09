@@ -1,7 +1,7 @@
 {
   "name": "fokusboard",
   "displayName": "Fokusboard",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "Side pane with the current topic, plan workflow status (Plan → Review → Einarbeiten → Umsetzen → Verify), artifacts, open decisions and todos (built on sirkitree/pinboard, MIT)",
   "author": {
     "name": "Marcus Thor"

@@ -322,6 +322,27 @@ const FOCUS_ICON =
 
 const open = ($: EngineInterface) => $.ui.open({ id: PANE, title: TITLE })
 
+// Puts "Zu „…“: " in the prompt box so the person types the answer right after it
+async function replyTo($: EngineInterface, d: Decision) {
+  const lead = `Zu „${d.text}“: `
+  const { text } = await $.prompt.read()
+  const { isFilled } = await $.prompt.fill(text.trim() ? { text: `\n${lead}`, mode: 'append' } : { text: lead, mode: 'replace' })
+  // The desktop draws its own composer; there Claude asks instead
+  if (!isFilled) await askAbout($, [d])
+}
+
+// Has Claude put the open questions to the person, one dialog with options each
+async function askAbout($: EngineInterface, list: Decision[]) {
+  if (list.length === 0) return
+  const lines = list.map(d => `${d.id}: ${d.text}`).join('\n')
+  await $.prompt.submit({
+    text:
+      `Stell mir ${list.length === 1 ? 'diese offene Frage' : 'diese offenen Fragen'} vom Fokusboard jetzt direkt ` +
+      `mit AskUserQuestion, jeweils mit sinnvollen Antwortoptionen, und schließe sie danach mit decide:\n${lines}`,
+  })
+  await $.ui.toast(list.length === 1 ? 'Claude stellt dir die Frage gleich.' : `Claude stellt dir die ${list.length} Fragen gleich.`)
+}
+
 // Opens a plan file in the Mac's default app for Markdown
 async function openFile($: EngineInterface, path: string) {
   const { exitCode, stderr } = await $.process.run(['open', path])
@@ -643,8 +664,21 @@ export const register: Register = on => {
         {allArtifacts.length > 0 && <Text> </Text>}
 
         {allDecisions.length > 0 && <Box width={inner}>{header('Offene Entscheidungen', String(allDecisions.length), 'warning')}</Box>}
-        {allDecisions.map(d => item('◇', d.text, inner, false, 'warning'))}
-        {allDecisions.length > 0 && <Text> </Text>}
+        {allDecisions.length > 1 && (
+          <Box width={inner} marginBottom={1}>
+            <Button key="ask-all" label="Alle Fragen stellen" hotkey="a" plain onPress={() => askAbout($, allDecisions)} />
+          </Box>
+        )}
+        {allDecisions.length === 1 && <Box height={1} />}
+        {allDecisions.map(d => (
+          <Box flexDirection="column" width={inner} marginBottom={1}>
+            {item('◇', d.text, inner, false, 'warning')}
+            <Box flexDirection="row" paddingLeft={4} gap={2}>
+              <Button key={'reply:' + d.id} label="↩ Antworten" plain dimColor onPress={() => replyTo($, d)} />
+              <Button key={'ask:' + d.id} label="? Frag mich" plain dimColor onPress={() => askAbout($, [d])} />
+            </Box>
+          </Box>
+        ))}
 
         {allTodos.length > 0 && <Box width={inner} marginBottom={1}>{header('Todos', `${doneCount}/${allTodos.length}`, doneCount === allTodos.length ? 'success' : undefined)}</Box>}
         {allTodos.length > 0 && (
