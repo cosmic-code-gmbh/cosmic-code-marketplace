@@ -600,8 +600,10 @@ export const register: Register = on => {
     const { Box, Text, Button, Link } = elements
     // The remote surfaces draw vector icons; the terminal has no Svg and gets a glyph
     const Svg = e.surface !== 'terminal' && 'Svg' in elements ? elements.Svg : undefined
-    // One cell of padding on every side
-    const inner = Math.max(10, e.props.bodyColumns - 2)
+    // The terminal frames the whole board; inside it, one cell of padding on every side
+    const isTerminal = e.surface === 'terminal'
+    const frame = isTerminal ? 2 : 0
+    const inner = Math.max(10, e.props.bodyColumns - 2 - frame)
     const { thread: th, topic: tp, todos: allTodos, decisions: allDecisions, artifacts: allArtifacts } = await readBoard($)
     const status = await read($, planStatus)
     const currentMode = await read($, mode)
@@ -614,22 +616,27 @@ export const register: Register = on => {
     const doneCount = allTodos.filter(t => t.isDone).length
 
     // One label style for every section: dim uppercase, the count beside it in the section's colour
-    const header = (title: string, count: string, color?: string) => (
-      <Box flexDirection="row" flexGrow={1} flexShrink={1}>
-        <Box flexShrink={0}>
-          <Text dimColor>
-            {title.toUpperCase()}
-            {count && <Text color={color}>{'  ' + count}</Text>}
-            {' '}
-          </Text>
+    // The terminal counts cells, so its rule is drawn to the exact width (no "…" from truncation);
+    // the desktop's proportional font cannot be counted, so there a long rule is clipped by its box
+    const header = (title: string, count: string, color?: string, width = inner) => {
+      const label = title.toUpperCase() + (count ? '  ' + count : '') + ' '
+      return (
+        <Box flexDirection="row" flexGrow={1} flexShrink={1}>
+          <Box flexShrink={0}>
+            <Text dimColor>
+              {title.toUpperCase()}
+              {count && <Text color={color}>{'  ' + count}</Text>}
+              {' '}
+            </Text>
+          </Box>
+          <Box flexGrow={1} flexShrink={1} overflow="hidden">
+            <Text dimColor wrap="truncate">
+              {'─'.repeat(isTerminal ? Math.max(0, width - label.length) : 200)}
+            </Text>
+          </Box>
         </Box>
-        <Box flexGrow={1} flexShrink={1}>
-          <Text dimColor wrap="truncate">
-            {'─'.repeat(200)}
-          </Text>
-        </Box>
-      </Box>
-    )
+      )
+    }
     // A ten-cell bar of finished todos
     const progress = (done: number, total: number) => {
       const full = total ? Math.round((done / total) * 10) : 0
@@ -862,7 +869,14 @@ export const register: Register = on => {
     const showWorkflow = isPlanMode || status.length > 0
 
     return (
-      <Box flexDirection="column" width={inner + 2} padding={1}>
+      <Box
+        flexDirection="column"
+        width={inner + 2 + frame}
+        padding={1}
+        borderStyle={isTerminal ? 'round' : undefined}
+        borderColor={isTerminal ? 'claude' : undefined}
+        borderDimColor={isTerminal}
+      >
         {offerCard}
         {allNotices.map(noticeRow)}
         {threadBlock}
@@ -871,7 +885,7 @@ export const register: Register = on => {
 
         {showWorkflow && (
           <Box flexDirection="row" justifyContent="space-between" width={inner} marginBottom={1}>
-            {header('Plan-Workflow', status.length ? String(status.length) : '')}
+            {header('Plan-Workflow', status.length ? String(status.length) : '', undefined, inner - (isPlanMode ? 12 : 3))}
             <Text> </Text>
             {isPlanMode ? (
               <Text bold color="planMode">
@@ -919,7 +933,7 @@ export const register: Register = on => {
 
         {allLog.length > 0 && (
           <Box flexDirection="row" width={inner} marginBottom={1}>
-            {header('Entschieden', String(allLog.length), 'success')}
+            {header('Entschieden', String(allLog.length), 'success', allLog.length > 1 ? inner - 10 : inner)}
             {allLog.length > 1 && (
               <Button
                 key="toggle-log"

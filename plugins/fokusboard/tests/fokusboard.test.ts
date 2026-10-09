@@ -470,6 +470,19 @@ describe('session', () => {
     expect(await texts(ui)).not.toContain('Weitermachen')
   })
 
+  test('the terminal frames the board and draws each rule to the exact width', async ($, on) => {
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    await $.tool.call({ tool: TOOL, thread: { title: 'T', goal: 'G' } })
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    const root = await ui.find({ type: 'Box' })
+    expect(root?.props.borderStyle).toBe('round')
+    // bodyColumns 52 → inner 48; "WORUM ES GEHT " is 14 cells, so the rule is 34
+    const rule = (await ui.findAll({ type: 'Text' })).map(t => t.text).find(t => /^─+$/.test(t))
+    expect(rule?.length).toBe(34)
+    const desktop = await $.ui.mount({ ...PANE, surface: 'desktop' })
+    expect((await desktop.find({ type: 'Box' }))?.props.borderStyle).toBeUndefined()
+  })
+
   test('the empty pane invites a topic', async $ => {
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     const all = await texts(ui)
