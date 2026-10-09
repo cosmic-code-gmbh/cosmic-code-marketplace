@@ -485,7 +485,7 @@ export const register: Register = on => {
     // The topic card: a rounded frame in the accent colour, so it reads as the headline of the pane
         const topicCard = tp ? (
       <Box flexDirection="column" width={inner}>
-        <Box width={inner}>{header('Aktuell', '')}</Box>
+        <Box width={inner} marginBottom={1}>{header('Aktuell', '')}</Box>
         <Box flexDirection="row" alignItems="flex-start" width={inner}>
           <Box width={2} flexShrink={0}>
             {Svg ? <Svg source={FOCUS_ICON} alt="Thema" width={15} height={15} /> : <Text color="claude">◎</Text>}
@@ -521,7 +521,7 @@ export const register: Register = on => {
     // The anchor of the conversation: what it is about overall, read before the current step
     const threadBlock = th ? (
       <Box flexDirection="column" width={inner} marginBottom={1}>
-        <Box width={inner}>{header('Worum es geht', '')}</Box>
+        <Box width={inner} marginBottom={1}>{header('Worum es geht', '')}</Box>
         <Text bold color="claude" wrap="wrap">
           {th.title}
         </Text>
