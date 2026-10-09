@@ -1,7 +1,7 @@
 {
   "name": "fokusboard",
   "displayName": "Fokusboard",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Side pane with a summary of the current topic, open decisions and todos, kept up to date by Claude (built on sirkitree/pinboard, MIT)",
   "author": {
     "name": "Marcus Thor"

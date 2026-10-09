@@ -214,9 +214,17 @@ export const register: Register = on => {
     const card = inner - 4
     const topicCard = tp ? (
       <Box flexDirection="column" width={inner} borderStyle="round" borderColor="claude" paddingX={1}>
-        <Text bold color="claude" wrap="wrap">
-          {'◆ ' + tp.title}
-        </Text>
+        {/* U+FE0E keeps the diamond a text glyph; the desktop font would otherwise draw it as a larger emoji */}
+        <Box flexDirection="row" alignItems="flex-start" width={card}>
+          <Box width={2} flexShrink={0}>
+            <Text color="claude">{'◆\uFE0E'}</Text>
+          </Box>
+          <Box flexShrink={1} flexGrow={1}>
+            <Text bold color="claude" wrap="wrap">
+              {tp.title}
+            </Text>
+          </Box>
+        </Box>
         <Box width={card}>
           <Text wrap="wrap">{tp.summary}</Text>
         </Box>

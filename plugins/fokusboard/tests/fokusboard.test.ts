@@ -83,7 +83,8 @@ describe('session', () => {
     for (const surface of SURFACES) {
       const ui = await $.ui.mount({ ...PANE, surface })
       const all = await texts(ui)
-      expect(all).toContain('◆ Payment v3')
+      expect(all).toContain('◆\uFE0E')
+      expect((await ui.find({ type: 'Text', text: 'Payment v3' }))?.props.bold).toBe(true)
       expect(all).toContain('Checkout läuft, Rückgabeseite fertig.')
       expect(all).toContain('Stripe Sandbox')
       expect(all).toContain('◇')
