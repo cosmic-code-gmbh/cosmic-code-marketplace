@@ -693,8 +693,10 @@ export const register: Register = on => {
         ))}
       </Box>
     ) : th ? null : (
-      <Box width={inner} borderStyle="round" borderDimColor paddingX={1}>
-        <Text dimColor>Noch kein Thema. Claude setzt es, sobald das Gespräch eins hat.</Text>
+      <Box width={inner} marginBottom={1}>
+        <Text dimColor wrap="wrap">
+          Noch kein Thema. Claude setzt es, sobald das Gespräch eins hat.
+        </Text>
       </Box>
     )
 
@@ -872,7 +874,10 @@ export const register: Register = on => {
       <Box
         flexDirection="column"
         width={inner + 2 + frame}
-        padding={1}
+        paddingX={1}
+        paddingY={isTerminal ? 0 : 1}
+        // In the terminal the frame fills the pane, so the board reads as one card rather than a box adrift in it
+        minHeight={isTerminal ? Math.max(3, e.props.scroll.bodyRows) : undefined}
         borderStyle={isTerminal ? 'round' : undefined}
         borderColor={isTerminal ? 'claude' : undefined}
         borderDimColor={isTerminal}

@@ -476,6 +476,8 @@ describe('session', () => {
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     const root = await ui.find({ type: 'Box' })
     expect(root?.props.borderStyle).toBe('round')
+    // The frame fills the pane's height
+    expect(root?.props.minHeight).toBe(60)
     // bodyColumns 52 → inner 48; "WORUM ES GEHT " is 14 cells, so the rule is 34
     const rule = (await ui.findAll({ type: 'Text' })).map(t => t.text).find(t => /^─+$/.test(t))
     expect(rule?.length).toBe(34)
@@ -487,6 +489,8 @@ describe('session', () => {
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     const all = await texts(ui)
     expect(all).toContain('Noch kein Thema')
+    // The placeholder is a plain line, not a frame inside the frame
+    expect((await ui.findAll({ type: 'Box' })).filter(b => b.props.borderStyle).length).toBe(1)
     // Empty decisions and todos collapse into one quiet line
     expect(all).toContain('Keine offenen Entscheidungen, keine Todos.')
     expect(all).not.toContain('TODOS')
