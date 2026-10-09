@@ -2,6 +2,9 @@ export type Todo = { id: string; text: string; isDone: boolean; isActive?: boole
 
 export type Decision = { id: string; text: string }
 
+// What the whole conversation is about; stable, changed only when the overall goal changes
+export type Thread = { title: string; goal: string }
+
 export type Topic = { title: string; summary: string; points: string[] }
 
 // A link that matters for the current work: a claude.ai artifact, a PR, a doc
@@ -29,6 +32,7 @@ export type PlanStatus = {
 declare module 'claude-code' {
   interface PluginState {
     fokusboard: {
+      thread: Thread | null
       topic: Topic | null
       decisions: Decision[]
       todos: Todo[]

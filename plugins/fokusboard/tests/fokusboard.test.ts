@@ -19,7 +19,7 @@ const PANE = {
   },
 } as const
 
-const EMPTY = { topic: null, todos: [], decisions: [], artifacts: [] }
+const EMPTY = { thread: null, topic: null, todos: [], decisions: [], artifacts: [] }
 
 const texts = async (ui: { findAll: (q: { type: string }) => Promise<{ text: string }[]> }) =>
   (await ui.findAll({ type: 'Text' })).map(t => t.text).join('')
@@ -60,6 +60,16 @@ describe('board', () => {
     expect(applyUpdate(board, { add_todos: ['x'] }).topic?.title).toBe('Neu')
   })
 
+  test('the thread is set once and replaced only with a reason', () => {
+    let board = applyUpdate(EMPTY, { thread: { title: ' Mods einrichten ', goal: 'Claude Code mit Mods ausbauen.' } })
+    expect(board.thread).toEqual({ title: 'Mods einrichten', goal: 'Claude Code mit Mods ausbauen.' })
+    // A step-level rewrite without why is ignored
+    board = applyUpdate(board, { thread: { title: 'Icon tauschen', goal: 'Neues Icon.' } })
+    expect(board.thread?.title).toBe('Mods einrichten')
+    board = applyUpdate(board, { thread: { title: 'Release', goal: 'Neues Ziel.', why: 'Mods fertig, jetzt Release' } })
+    expect(board.thread).toEqual({ title: 'Release', goal: 'Neues Ziel.' })
+  })
+
   test('todos and decisions work by id; clear_done drops finished todos', () => {
     let board = applyUpdate(EMPTY, { add_todos: ['Write', 'Test', 'Drop'], open_decisions: ['Ship?'] })
     board = applyUpdate(board, { done_todos: ['t1'], remove_todos: ['t3'], start_todo: 't2', decide: [{ id: 'd1', answer: 'yes' }] })
@@ -78,14 +88,15 @@ describe('board', () => {
   })
 
   test('the board reads back with topic, plans and ids', () => {
+    expect(describeBoard(EMPTY)).toContain('Thread: (none yet')
     expect(describeBoard(EMPTY)).toContain('Topic: (none yet')
     expect(
       describeBoard(
-        { topic: { title: 'T', summary: 'S', points: ['p'] }, todos: [{ id: 't1', text: 'Write', isDone: false, isActive: true }], decisions: [{ id: 'd1', text: 'Which?' }], artifacts: [] },
+        { thread: null, topic: { title: 'T', summary: 'S', points: ['p'] }, todos: [{ id: 't1', text: 'Write', isDone: false, isActive: true }], decisions: [{ id: 'd1', text: 'Which?' }], artifacts: [] },
         [status({ hasReview: true, latestReview: 2, integratedReview: 1 })],
         'plan',
       ),
-    ).toBe('Fokusboard now:\nTopic: T: S\n  - p\nMode: plan mode\nPlan /r/docs/x.md: Review #2 einarbeiten\nt1 [>] Write\nd1 [?] Which?')
+    ).toBe('Fokusboard now:\nThread: (none yet; set thread with the overall goal of this conversation)\nTopic: T: S\n  - p\nMode: plan mode\nPlan /r/docs/x.md: Review #2 einarbeiten\nt1 [>] Write\nd1 [?] Which?')
   })
 
   test('questions at the end of a reply are detected outside code', () => {
@@ -146,6 +157,7 @@ describe('session', () => {
     on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'hi', scope: 'shared' }] }))
     await $.tool.call({
       tool: TOOL,
+      thread: { title: 'Payment v3 fertigstellen', goal: 'Checkout und Webhooks für Stripe produktionsreif machen.' },
       topic: { title: 'Payment v3', summary: 'Checkout läuft, Rückgabeseite fertig.', points: ['Stripe Sandbox'] },
       add_todos: ['Webhook testen', 'Deploy'],
       open_decisions: ['Staging zuerst?'],
@@ -157,6 +169,10 @@ describe('session', () => {
       if (surface === 'terminal') expect(all).toContain('◎')
       else expect((await ui.find({ type: 'Svg' }))?.props.alt).toBe('Thema')
       expect((await ui.find({ type: 'Text', text: 'Payment v3' }))?.props.bold).toBe(true)
+      expect(all).toContain('Worum es geht')
+      expect(all).toContain('Checkout und Webhooks für Stripe produktionsreif machen.')
+      // The anchor comes before the current step
+      expect(all.indexOf('Payment v3 fertigstellen')).toBeLessThan(all.indexOf('Aktuell'))
       expect(all).toContain('Checkout läuft, Rückgabeseite fertig.')
       expect(all).toContain('Stripe Sandbox')
       expect(all).toContain('◇')
@@ -169,7 +185,11 @@ describe('session', () => {
       await ui.unmount()
     }
     const { sections } = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] })
+    expect(sections.at(-1)?.text).toContain('Thread: Payment v3 fertigstellen')
     expect(sections.at(-1)?.text).toContain('Topic: Payment v3')
+    // A thread rewrite without why is refused and says so
+    const refused = await $.tool.call({ tool: TOOL, thread: { title: 'Anderes', goal: 'x' } })
+    expect('result' in refused && refused.result).toContain('Thread unchanged')
   })
 
   test('a tracked plan shows its pipeline, review and verify status and links its files', async ($, on) => {

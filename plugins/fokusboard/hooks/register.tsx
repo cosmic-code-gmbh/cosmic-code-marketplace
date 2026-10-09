@@ -3,13 +3,14 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Artifact, Decision, PlanStatus, Step, Todo, Topic } from '../types'
+import type { Artifact, Decision, PlanStatus, Step, Thread, Todo, Topic } from '../types'
 
 const PANE = 'fokusboard'
 const TITLE = 'Fokusboard'
 const TOOL = 'mcp__fokusboard__update'
 const POLL_MS = 5000
 
+const thread = atom({ plugin: 'fokusboard', key: 'thread' } as const, null as Thread | null)
 const topic = atom({ plugin: 'fokusboard', key: 'topic' } as const, null as Topic | null)
 const decisions = atom({ plugin: 'fokusboard', key: 'decisions' } as const, [] as Decision[])
 const todos = atom({ plugin: 'fokusboard', key: 'todos' } as const, [] as Todo[])
@@ -21,7 +22,8 @@ const lastCodeEditAt = atom({ plugin: 'fokusboard', key: 'lastCodeEditAt' } as c
 
 const DESCRIPTION = [
   "Keep the user's Fokusboard current: a sidebar that stays in view while the transcript scrolls, showing the current topic, the plan workflow, artifacts, open decisions and the task list.",
-  'topic: set it when a conversation gets a subject, and update it whenever the subject shifts or your understanding changes materially (a decision made, a cause found, a plan agreed).',
+  'thread: what this whole conversation is about, the anchor the user reads first so every later step makes sense. Set it once, early: title 3-8 words, goal 1-3 sentences on the overall aim and why. It stays put while the work moves on; change it only when the overall goal changes fundamentally, and then give why (the board refuses a thread change without why). Never use it for the current step.',
+  'topic: the current focus within the thread (what is being worked on right now); set it when a conversation gets a subject, and update it whenever the subject shifts or your understanding changes materially (a decision made, a cause found, a plan agreed).',
   'topic.title: 2-6 words. topic.summary: 1-3 short sentences on where things stand now, not a history. topic.points: up to 5 terse key facts or constraints worth keeping in view.',
   "Write the topic in the user's language.",
   'track_plans: paths of plan files (docs/**/<name>.md of the Plan → Review → Einarbeiten → Verify workflow) this session works on; the board reads their version headers and .review.md/.verify.md siblings itself. Plans you write, edit or exit plan mode with are tracked automatically. untrack_plans removes them.',
@@ -38,6 +40,11 @@ const strings = { type: 'array', items: { type: 'string' } }
 const SCHEMA = {
   type: 'object',
   properties: {
+    thread: {
+      type: 'object',
+      properties: { title: { type: 'string' }, goal: { type: 'string' }, why: { type: 'string' } },
+      required: ['title', 'goal'],
+    },
     topic: {
       type: 'object',
       properties: { title: { type: 'string' }, summary: { type: 'string' }, points: strings },
@@ -64,6 +71,7 @@ const SCHEMA = {
 }
 
 export type Update = {
+  thread?: { title: string; goal: string; why?: string }
   topic?: { title: string; summary: string; points?: string[] }
   track_plans?: string[]
   untrack_plans?: string[]
@@ -78,14 +86,18 @@ export type Update = {
   decide?: { id: string; answer: string }[]
 }
 
-export type Board = { topic: Topic | null; todos: Todo[]; decisions: Decision[]; artifacts: Artifact[] }
+export type Board = { thread: Thread | null; topic: Topic | null; todos: Todo[]; decisions: Decision[]; artifacts: Artifact[] }
 
 // The next id for a prefix: one past the highest in use
 const nextId = (prefix: string, ids: string[]) =>
   prefix + (Math.max(0, ...ids.map(id => Number(id.slice(prefix.length)) || 0)) + 1)
 
 export function applyUpdate(board: Board, change: Update): Board {
-  let { topic: tp, todos: t, decisions: d, artifacts: a } = board
+  let { thread: th, topic: tp, todos: t, decisions: d, artifacts: a } = board
+  // The thread is the stable anchor: set once, replaced only with a reason
+  if (change.thread && (!th || change.thread.why?.trim())) {
+    th = { title: change.thread.title.trim(), goal: change.thread.goal.trim() }
+  }
   if (change.topic) {
     tp = {
       title: change.topic.title.trim(),
@@ -107,7 +119,7 @@ export function applyUpdate(board: Board, change: Update): Board {
   if (change.start_todo) t = t.map(x => ({ ...x, isActive: x.id === change.start_todo }))
   t = t.map(x => (x.isDone && x.isActive ? { ...x, isActive: false } : x))
   d = d.filter(x => !decided.has(x.id))
-  return { topic: tp, todos: t, decisions: d, artifacts: a.slice(-12) }
+  return { thread: th, topic: tp, todos: t, decisions: d, artifacts: a.slice(-12) }
 }
 
 // ── Plan workflow ────────────────────────────────────────────────────────────
@@ -242,6 +254,11 @@ async function maybeTrack($: EngineInterface, raw: string, force = false) {
 
 export function describeBoard(board: Board, status: PlanStatus[] = [], currentMode: string | null = null, lastCodeEdit = 0): string {
   const lines = ['Fokusboard now:']
+  lines.push(
+    board.thread
+      ? `Thread: ${board.thread.title}: ${board.thread.goal}`
+      : 'Thread: (none yet; set thread with the overall goal of this conversation)',
+  )
   if (board.topic) {
     lines.push(`Topic: ${board.topic.title}: ${board.topic.summary}`)
     lines.push(...board.topic.points.map(p => `  - ${p}`))
@@ -269,16 +286,18 @@ const NUDGE =
   'If it was rhetorical, end your turn as is.'
 
 const readBoard = async ($: EngineInterface): Promise<Board> => ({
+  thread: await read($, thread),
   topic: await read($, topic),
   todos: await read($, todos),
   decisions: await read($, decisions),
   artifacts: await read($, artifacts),
 })
 
-const isEmpty = (b: Board) => !b.topic && b.todos.length + b.decisions.length + b.artifacts.length === 0
+const isEmpty = (b: Board) => !b.thread && !b.topic && b.todos.length + b.decisions.length + b.artifacts.length === 0
 
 export function summarize(change: Update): string {
   const parts = [
+    change.thread && `thread "${change.thread.title}"`,
     change.topic && `topic "${change.topic.title}"`,
     change.track_plans?.length && `+${change.track_plans.length} plan`,
     change.untrack_plans?.length && `-${change.untrack_plans.length} plan`,
@@ -361,6 +380,7 @@ export const register: Register = on => {
     const change = e as Update
     const before = await readBoard($)
     const board = applyUpdate(before, change)
+    await update($, thread, () => board.thread)
     await update($, topic, () => board.topic)
     await update($, todos, () => board.todos)
     await update($, decisions, () => board.decisions)
@@ -374,7 +394,11 @@ export const register: Register = on => {
     const status = await read($, planStatus)
     // Opens by itself the first time something lands on an empty board
     if (isEmpty(before) && (!isEmpty(board) || status.length > 0)) await open($)
-    return { result: describeBoard(board, status, await read($, mode), await read($, lastCodeEditAt)) }
+    const kept =
+      change.thread && before.thread && !change.thread.why?.trim()
+        ? 'Thread unchanged: it is the stable anchor; pass thread.why if the overall goal really changed.\n'
+        : ''
+    return { result: kept + describeBoard(board, status, await read($, mode), await read($, lastCodeEditAt)) }
   })
 
   // Plans Claude writes, edits or presents with ExitPlanMode join the board; code edits mark implementation
@@ -410,7 +434,7 @@ export const register: Register = on => {
     const Svg = e.surface !== 'terminal' && 'Svg' in elements ? elements.Svg : undefined
     // One cell of padding on every side
     const inner = Math.max(10, e.props.bodyColumns - 2)
-    const { topic: tp, todos: allTodos, decisions: allDecisions, artifacts: allArtifacts } = await readBoard($)
+    const { thread: th, topic: tp, todos: allTodos, decisions: allDecisions, artifacts: allArtifacts } = await readBoard($)
     const status = await read($, planStatus)
     const currentMode = await read($, mode)
     const codeEdit = await read($, lastCodeEditAt)
@@ -440,6 +464,7 @@ export const register: Register = on => {
     const card = inner - 4
     const topicCard = tp ? (
       <Box flexDirection="column" width={inner} borderStyle="round" borderColor="claude" paddingX={1}>
+        <Text dimColor>Aktuell</Text>
         <Box flexDirection="row" alignItems="flex-start" width={card}>
           <Box width={2} flexShrink={0}>
             {Svg ? <Svg source={FOCUS_ICON} alt="Thema" width={15} height={15} /> : <Text color="claude">◎</Text>}
@@ -472,6 +497,19 @@ export const register: Register = on => {
         <Text dimColor>Noch kein Thema. Claude setzt es, sobald das Gespräch eins hat.</Text>
       </Box>
     )
+
+    // The anchor of the conversation: what it is about overall, read before the current step
+    const threadBlock = th ? (
+      <Box flexDirection="column" width={inner} marginBottom={1}>
+        <Text dimColor>Worum es geht</Text>
+        <Text bold wrap="wrap">
+          {th.title}
+        </Text>
+        <Box width={inner}>
+          <Text wrap="wrap">{th.goal}</Text>
+        </Box>
+      </Box>
+    ) : null
 
     const TONE = { ok: 'success', wait: undefined, warn: 'warning', busy: 'suggestion' } as const
     const isPlanMode = currentMode === 'plan'
@@ -548,6 +586,7 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column" width={inner + 2} padding={1}>
+        {threadBlock}
         {topicCard}
         <Text> </Text>
 
