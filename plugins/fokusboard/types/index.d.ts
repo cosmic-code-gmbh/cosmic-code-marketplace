@@ -7,6 +7,20 @@ export type Thread = { title: string; goal: string }
 
 export type Topic = { title: string; summary: string; points: string[] }
 
+// An answered decision, kept so later work can see why things are as they are
+export type LogEntry = { text: string; answer: string; at: number }
+
+// Something that changed in a tracked plan outside this session and asks for a step
+export type Notice = { path: string; name: string; kind: 'review' | 'gaps' | 'verified'; label: string; at: number }
+
+// The board as saved per repository and branch, offered back in a later session
+export type Snapshot = {
+  branch: string
+  savedAt: number
+  board: { thread: Thread | null; topic: Topic | null; todos: Todo[]; decisions: Decision[]; artifacts: Artifact[]; log: LogEntry[] }
+  plans: string[]
+}
+
 // A link that matters for the current work: a claude.ai artifact, a PR, a doc
 export type Artifact = { label: string; href: string }
 
@@ -41,6 +55,10 @@ declare module 'claude-code' {
       plans: string[]
       planStatus: PlanStatus[]
       lastCodeEditAt: number
+      log: LogEntry[]
+      showLog: boolean
+      notices: Notice[]
+      offer: Snapshot | null
     }
   }
 }

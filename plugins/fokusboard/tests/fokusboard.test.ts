@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import type { PlanStatus } from '../types'
-import { applyUpdate, asksUser, describeBoard, parseHeaders, pipeline, planOf, stageOf, summarize } from '../hooks/register'
+import { ago, applyUpdate, asksUser, describeBoard, noticesFor, parseHeaders, pipeline, planOf, stageOf, stillDue, summarize } from '../hooks/register'
 
 const SURFACES = ['terminal', 'desktop'] as const
 const TOOL = 'mcp__fokusboard__update'
@@ -19,7 +19,7 @@ const PANE = {
   },
 } as const
 
-const EMPTY = { thread: null, topic: null, todos: [], decisions: [], artifacts: [] }
+const EMPTY = { thread: null, topic: null, todos: [], decisions: [], artifacts: [], log: [] }
 
 const texts = async (ui: { findAll: (q: { type: string }) => Promise<{ text: string }[]> }) =>
   (await ui.findAll({ type: 'Text' })).map(t => t.text).join('')
@@ -92,7 +92,7 @@ describe('board', () => {
     expect(describeBoard(EMPTY)).toContain('Topic: (none yet')
     expect(
       describeBoard(
-        { thread: null, topic: { title: 'T', summary: 'S', points: ['p'] }, todos: [{ id: 't1', text: 'Write', isDone: false, isActive: true }], decisions: [{ id: 'd1', text: 'Which?' }], artifacts: [] },
+        { thread: null, topic: { title: 'T', summary: 'S', points: ['p'] }, todos: [{ id: 't1', text: 'Write', isDone: false, isActive: true }], decisions: [{ id: 'd1', text: 'Which?' }], artifacts: [], log: [] },
         [status({ hasReview: true, latestReview: 2, integratedReview: 1 })],
         'plan',
       ),
@@ -108,6 +108,41 @@ describe('board', () => {
     expect(summarize({ topic: { title: 'X', summary: 'y' }, track_plans: ['a'], add_todos: ['a'], decide: [{ id: 'd1', answer: 'z' }] })).toBe(
       'Fokusboard: topic "X", +1 plan, +1 todo, 1 decided',
     )
+  })
+})
+
+describe('decision log', () => {
+  test('a decided question moves into the log with its answer', () => {
+    let board = applyUpdate(EMPTY, { open_decisions: ['Staging zuerst?', 'Welcher Editor?'] })
+    board = applyUpdate(board, { decide: [{ id: 'd1', answer: ' ja, erst Staging ' }] }, 1000)
+    expect(board.decisions.map(d => d.text)).toEqual(['Welcher Editor?'])
+    expect(board.log).toEqual([{ text: 'Staging zuerst?', answer: 'ja, erst Staging', at: 1000 }])
+    expect(describeBoard(board)).toContain('Decided: Staging zuerst? → ja, erst Staging')
+  })
+
+  test('times read as German relative times', () => {
+    expect(ago(20_000)).toBe('gerade eben')
+    expect(ago(5 * 60_000)).toBe('vor 5 min')
+    expect(ago(3 * 3_600_000)).toBe('vor 3 h')
+    expect(ago(26 * 3_600_000)).toBe('vor 1 Tag')
+    expect(ago(72 * 3_600_000)).toBe('vor 3 Tagen')
+  })
+})
+
+describe('plan notices', () => {
+  const base = status({ hasReview: true, latestReview: 1, integratedReview: 1 })
+  test('a new review and a new verify result are news; a first sighting is not', () => {
+    expect(noticesFor([], [base], 1)).toEqual([])
+    expect(noticesFor([base], [{ ...base, latestReview: 2 }], 1).map(n => [n.kind, n.label])).toEqual([['review', 'Review #2 zu x ist da']])
+    const gaps = { ...base, hasVerify: true, verifiedVersion: 1, verifyResult: 'Lücken' as const }
+    expect(noticesFor([base], [gaps], 1).map(n => n.kind)).toEqual(['gaps'])
+    expect(noticesFor([gaps], [{ ...gaps, verifyResult: 'vollständig' as const }], 1).map(n => n.kind)).toEqual(['verified'])
+  })
+
+  test('a notice goes once its step is done', () => {
+    const review = { path: '/r/docs/x.md', name: 'x', kind: 'review' as const, label: '', at: 1 }
+    expect(stillDue(review, [{ ...base, latestReview: 2 }])).toBe(true)
+    expect(stillDue(review, [{ ...base, latestReview: 2, integratedReview: 2 }])).toBe(false)
   })
 })
 
@@ -241,7 +276,7 @@ describe('session', () => {
     await $.tool.call({ tool: TOOL, track_plans: ['/r/docs/x.md'] })
     const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
     await ui.press({ key: 'open:/r/docs/x.md' })
-    expect(ran).toEqual([['open', '/r/docs/x.md']])
+    expect(ran.filter(argv => argv[0] === 'open')).toEqual([['open', '/r/docs/x.md']])
   })
 
   test('plan mode shows in the pane before any plan is saved', async ($, on) => {
@@ -301,6 +336,138 @@ describe('session', () => {
     const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
     await ui.press({ key: 'reply:d1' })
     expect(sent.at(-1)).toContain('d1: Staging zuerst?')
+  })
+
+  test('a review that lands shows a notice whose button fills the integrate command', async ($, on) => {
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    on('ui.toast', () => ({ value: undefined }))
+    on('session.cwd', () => ({ value: '/r' }))
+    on('prompt.read', () => ({ value: { text: '', cursor: 0 } }))
+    const filled: string[] = []
+    on('prompt.fill', (_$: unknown, e: { text: string }) => {
+      filled.push(e.text)
+      return { isFilled: true }
+    })
+    const tree: Record<string, string> = {
+      '/r/docs/x.md': 'Plan Version #1\nPlan Version #1 — Review #1 eingearbeitet\n',
+      '/r/docs/x.review.md': 'Review Version #1\n',
+    }
+    files(on, tree)
+    await $.tool.call({ tool: TOOL, track_plans: ['/r/docs/x.md'] })
+    // Codex writes review #2 outside the session; the next read sees it
+    tree['/r/docs/x.review.md'] = 'Review Version #1\nReview Version #2\n'
+    await $.tool.call({ tool: TOOL })
+    for (const surface of SURFACES) {
+      const ui = await $.ui.mount({ ...PANE, surface })
+      expect(await texts(ui)).toContain('Review #2 zu x ist da')
+      await ui.unmount()
+    }
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'act:review/r/docs/x.md' })
+    expect(filled).toEqual(['/plan-integrate-review docs/x.md'])
+    expect(await texts(ui)).not.toContain('Review #2 zu x ist da')
+  })
+
+  test('the log shows the latest answer folded and all of them open', async ($, on) => {
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    await $.tool.call({ tool: TOOL, open_decisions: ['Staging zuerst?', 'Welcher Editor?'] })
+    await $.tool.call({ tool: TOOL, decide: [{ id: 'd1', answer: 'ja' }] })
+    await $.tool.call({ tool: TOOL, decide: [{ id: 'd2', answer: 'VS Code' }] })
+    for (const surface of SURFACES) {
+      const ui = await $.ui.mount({ ...PANE, surface })
+      const all = await texts(ui)
+      expect(all).toContain('ENTSCHIEDEN')
+      expect(all).toContain('Welcher Editor?')
+      expect(all).toContain('VS Code')
+      expect(all).not.toContain('Staging zuerst?')
+      await ui.press({ key: 'toggle-log' })
+      expect(await texts(ui)).toContain('Staging zuerst?')
+      await ui.press({ key: 'toggle-log' })
+      await ui.unmount()
+    }
+  })
+
+  const git = (on: any) => {
+    on('session.cwd', () => ({ value: '/r' }))
+    on('process.run', (_$: unknown, e: { argv: string[] }) => ({
+      value: { exitCode: 0, stdout: e.argv.includes('--show-toplevel') ? '/r\n' : 'feature/pay\n', stderr: '' },
+    }))
+  }
+  // What a session start calls beneath the plugin
+  const engineStart = (on: any) => {
+    on('command.register', () => ({ value: undefined }))
+    on('tool.register', () => ({ value: undefined }))
+    on('clock.every', () => ({ value: undefined }))
+    on('session.start', (_$: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
+  }
+  const memoryStore = (on: any, store: Record<string, unknown>) => {
+    on('store.set', (_$: unknown, e: { key: string; value: unknown }) => {
+      store[e.key] = JSON.parse(JSON.stringify(e.value))
+      return { value: undefined }
+    })
+    on('store.get', (_$: unknown, e: { key: string }) => ({ value: store[e.key] }))
+    on('store.delete', (_$: unknown, e: { key: string }) => {
+      delete store[e.key]
+      return { value: undefined }
+    })
+  }
+
+  test('the board is saved under its repository and branch', async ($, on) => {
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    git(on)
+    const store: Record<string, unknown> = {}
+    memoryStore(on, store)
+    await $.tool.call({ tool: TOOL, thread: { title: 'Payment v3', goal: 'Stripe fertig.' }, add_todos: ['Webhooks'] })
+    const snap = store['board:/r:feature/pay'] as { branch: string; board: { thread: { title: string }; todos: unknown[] } }
+    expect(snap.branch).toBe('feature/pay')
+    expect(snap.board.thread.title).toBe('Payment v3')
+    expect(snap.board.todos.length).toBe(1)
+  })
+
+  test('a new session on the branch offers the saved board back', async ($, on) => {
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    git(on)
+    const store: Record<string, unknown> = {
+      'board:/r:feature/pay': {
+        branch: 'feature/pay',
+        savedAt: Date.now() - 2 * 3_600_000,
+        board: { thread: { title: 'Payment v3', goal: 'Stripe fertig.' }, topic: null, todos: [{ id: 't1', text: 'Webhooks', isDone: false }], decisions: [], artifacts: [], log: [] },
+        plans: [],
+      },
+    }
+    memoryStore(on, store)
+    engineStart(on)
+    await $.session.start({ cwd: '/r', surface: 'terminal', isInteractive: true })
+    for (const surface of SURFACES) {
+      const ui = await $.ui.mount({ ...PANE, surface })
+      const all = await texts(ui)
+      expect(all).toContain('Weitermachen, wo du aufgehört hast?')
+      expect(all).toContain('Branch feature/pay')
+      expect(all).toContain('vor 2 h')
+      expect(all).toContain('1 offene Todos')
+      await ui.unmount()
+    }
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'restore' })
+    const after = await texts(ui)
+    expect(after).not.toContain('Weitermachen, wo du aufgehört hast?')
+    expect(after).toContain('Payment v3')
+    expect(after).toContain('Webhooks')
+  })
+
+  test('discarding the offer deletes the saved board', async ($, on) => {
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    git(on)
+    const store: Record<string, unknown> = {
+      'board:/r:feature/pay': { branch: 'feature/pay', savedAt: Date.now(), board: { thread: { title: 'Alt', goal: 'x' }, topic: null, todos: [], decisions: [], artifacts: [], log: [] }, plans: [] },
+    }
+    memoryStore(on, store)
+    engineStart(on)
+    await $.session.start({ cwd: '/r', surface: 'terminal', isInteractive: true })
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'discard' })
+    expect(store).toEqual({})
+    expect(await texts(ui)).not.toContain('Weitermachen')
   })
 
   test('the empty pane invites a topic', async $ => {

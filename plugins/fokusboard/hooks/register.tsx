@@ -3,7 +3,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Artifact, Decision, PlanStatus, Step, Thread, Todo, Topic } from '../types'
+import type { Artifact, Decision, LogEntry, Notice, PlanStatus, Snapshot, Step, Thread, Todo, Topic } from '../types'
 
 const PANE = 'fokusboard'
 const TITLE = 'Fokusboard'
@@ -19,6 +19,10 @@ const mode = atom({ plugin: 'fokusboard', key: 'mode' } as const, null as string
 const plans = atom({ plugin: 'fokusboard', key: 'plans' } as const, [] as string[])
 const planStatus = atom({ plugin: 'fokusboard', key: 'planStatus' } as const, [] as PlanStatus[])
 const lastCodeEditAt = atom({ plugin: 'fokusboard', key: 'lastCodeEditAt' } as const, 0)
+const log = atom({ plugin: 'fokusboard', key: 'log' } as const, [] as LogEntry[])
+const showLog = atom({ plugin: 'fokusboard', key: 'showLog' } as const, false)
+const notices = atom({ plugin: 'fokusboard', key: 'notices' } as const, [] as Notice[])
+const offer = atom({ plugin: 'fokusboard', key: 'offer' } as const, null as Snapshot | null)
 
 const DESCRIPTION = [
   "Keep the user's Fokusboard current: a sidebar that stays in view while the transcript scrolls, showing the current topic, the plan workflow, artifacts, open decisions and the task list.",
@@ -32,7 +36,7 @@ const DESCRIPTION = [
   'Use todos in place of writing task lists in your reply whenever the work takes 3+ distinct steps.',
   'add_todos: one action per item. start_todo: the todo id you are working on now; exactly one at a time. done_todos / remove_todos: todo ids.',
   'Mark a todo done only after the work, including any verification, is actually done.',
-  'decide: close a decision by id once the user has answered. clear_done: drop finished todos when a new topic starts.',
+  'decide: close a decision by id once the user has answered, with the answer in a few words (it stays in the decision log the user reads later). clear_done: drop finished todos when a new topic starts.',
   'The current board, with ids, is at the end of your system prompt.',
 ].join(' ')
 
@@ -86,14 +90,14 @@ export type Update = {
   decide?: { id: string; answer: string }[]
 }
 
-export type Board = { thread: Thread | null; topic: Topic | null; todos: Todo[]; decisions: Decision[]; artifacts: Artifact[] }
+export type Board = { thread: Thread | null; topic: Topic | null; todos: Todo[]; decisions: Decision[]; artifacts: Artifact[]; log: LogEntry[] }
 
 // The next id for a prefix: one past the highest in use
 const nextId = (prefix: string, ids: string[]) =>
   prefix + (Math.max(0, ...ids.map(id => Number(id.slice(prefix.length)) || 0)) + 1)
 
-export function applyUpdate(board: Board, change: Update): Board {
-  let { thread: th, topic: tp, todos: t, decisions: d, artifacts: a } = board
+export function applyUpdate(board: Board, change: Update, now = Date.now()): Board {
+  let { thread: th, topic: tp, todos: t, decisions: d, artifacts: a, log: l } = board
   // The thread is the stable anchor: set once, replaced only with a reason
   if (change.thread && (!th || change.thread.why?.trim())) {
     th = { title: change.thread.title.trim(), goal: change.thread.goal.trim() }
@@ -118,8 +122,11 @@ export function applyUpdate(board: Board, change: Update): Board {
   // One todo in progress at a time; finishing it ends its turn too
   if (change.start_todo) t = t.map(x => ({ ...x, isActive: x.id === change.start_todo }))
   t = t.map(x => (x.isDone && x.isActive ? { ...x, isActive: false } : x))
+  // A decision closes into the log with its answer, so the why stays findable
+  const answers = new Map((change.decide ?? []).map(x => [x.id, x.answer.trim()]))
+  l = [...l, ...d.filter(x => decided.has(x.id)).map(x => ({ text: x.text, answer: answers.get(x.id) ?? '', at: now }))].slice(-30)
   d = d.filter(x => !decided.has(x.id))
-  return { thread: th, topic: tp, todos: t, decisions: d, artifacts: a.slice(-12) }
+  return { thread: th, topic: tp, todos: t, decisions: d, artifacts: a.slice(-12), log: l }
 }
 
 // ── Plan workflow ────────────────────────────────────────────────────────────
@@ -223,7 +230,47 @@ async function refresh($: EngineInterface) {
   const next: PlanStatus[] = []
   for (const p of paths) next.push(await statusOf($, p))
   const before = await read($, planStatus)
-  if (JSON.stringify(before) !== JSON.stringify(next)) await update($, planStatus, () => next)
+  if (JSON.stringify(before) === JSON.stringify(next)) return
+  await update($, planStatus, () => next)
+  const fresh = noticesFor(before, next, Date.now())
+  const kept = (await read($, notices)).filter(n => stillDue(n, next))
+  const all = [...kept.filter(n => !fresh.some(f => f.path === n.path && f.kind === n.kind)), ...fresh]
+  if (JSON.stringify(all) !== JSON.stringify(await read($, notices))) await update($, notices, () => all)
+  for (const n of fresh) {
+    try {
+      await $.ui.toast(`Fokusboard: ${n.label}`)
+    } catch {}
+  }
+}
+
+// What changed in a plan since the last read and asks for a step: a new review, a new verify result
+export function noticesFor(before: PlanStatus[], after: PlanStatus[], now: number): Notice[] {
+  const out: Notice[] = []
+  for (const s of after) {
+    const prev = before.find(b => b.path === s.path)
+    // A plan seen for the first time is not news
+    if (!prev) continue
+    if ((s.latestReview ?? 0) > (prev.latestReview ?? 0)) {
+      out.push({ path: s.path, name: s.name, kind: 'review', label: `Review #${s.latestReview} zu ${s.name} ist da`, at: now })
+    }
+    if (s.verifyResult && (s.verifyResult !== prev.verifyResult || s.verifiedVersion !== prev.verifiedVersion)) {
+      out.push(
+        s.verifyResult === 'vollständig'
+          ? { path: s.path, name: s.name, kind: 'verified', label: `${s.name} ist vollständig verifiziert`, at: now }
+          : { path: s.path, name: s.name, kind: 'gaps', label: `Verify zu ${s.name}: ${s.verifyResult}`, at: now },
+      )
+    }
+  }
+  return out
+}
+
+// A notice goes once its step is done: the review worked in, the gaps closed
+export function stillDue(n: Notice, status: PlanStatus[]): boolean {
+  const s = status.find(x => x.path === n.path)
+  if (!s) return false
+  if (n.kind === 'review') return (s.latestReview ?? 0) > (s.integratedReview ?? 0)
+  if (n.kind === 'gaps') return s.verifyResult !== 'vollständig'
+  return true
 }
 
 // A path the workflow knows: a Markdown file under docs/
@@ -247,6 +294,7 @@ async function maybeTrack($: EngineInterface, raw: string, force = false) {
     if (!isPlan) return false
   }
   await update($, plans, list => [...list, path].slice(-6))
+  await save($)
   return true
 }
 
@@ -270,6 +318,7 @@ export function describeBoard(board: Board, status: PlanStatus[] = [], currentMo
   lines.push(...board.artifacts.map(a => `Artifact: ${a.label} <${a.href}>`))
   lines.push(...board.todos.map(t => `${t.id} [${t.isDone ? 'x' : t.isActive ? '>' : ' '}] ${t.text}`))
   lines.push(...board.decisions.map(d => `${d.id} [?] ${d.text}`))
+  lines.push(...board.log.slice(-5).map(x => `Decided: ${x.text} → ${x.answer}`))
   return lines.join('\n')
 }
 
@@ -286,6 +335,7 @@ const NUDGE =
   'If it was rhetorical, end your turn as is.'
 
 const readBoard = async ($: EngineInterface): Promise<Board> => ({
+  log: await read($, log),
   thread: await read($, thread),
   topic: await read($, topic),
   todos: await read($, todos),
@@ -349,6 +399,85 @@ async function openFile($: EngineInterface, path: string) {
   if (exitCode !== 0) await $.ui.toast(`Konnte ${path.split('/').at(-1)} nicht öffnen: ${stderr.trim()}`)
 }
 
+// ── Persistence per repository and branch ───────────────────────────────────
+
+// The store key of this checkout: its repository root and branch, or the folder outside git
+async function storeKey($: EngineInterface): Promise<{ key: string; branch: string }> {
+  try {
+    const top = await $.process.run(['git', 'rev-parse', '--show-toplevel'])
+    const head = await $.process.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'])
+    if (top.exitCode === 0 && head.exitCode === 0) {
+      return { key: `board:${top.stdout.trim()}:${head.stdout.trim()}`, branch: head.stdout.trim() }
+    }
+  } catch {}
+  return { key: `board:${await $.session.cwd().catch(() => 'unknown')}`, branch: '' }
+}
+
+// Saves the board for this branch; never an empty one, and not while an earlier one waits to be restored
+async function save($: EngineInterface) {
+  if (await read($, offer)) return
+  const board = await readBoard($)
+  const tracked = await read($, plans)
+  if (isEmpty(board) && tracked.length === 0) return
+  // Saving is a convenience: a store or git that fails never stops the board
+  try {
+    const { key, branch } = await storeKey($)
+    const snap: Snapshot = { branch, savedAt: Date.now(), board, plans: tracked }
+    await $.store.set(key, snap)
+  } catch {}
+}
+
+async function restore($: EngineInterface, snap: Snapshot) {
+  const b = snap.board
+  await update($, thread, () => b.thread)
+  await update($, topic, () => b.topic)
+  await update($, todos, () => b.todos)
+  await update($, decisions, () => b.decisions)
+  await update($, artifacts, () => b.artifacts)
+  await update($, log, () => b.log ?? [])
+  await update($, plans, () => snap.plans)
+  await update($, offer, () => null)
+  await refresh($)
+}
+
+async function discard($: EngineInterface) {
+  await update($, offer, () => null)
+  await $.store.delete((await storeKey($)).key)
+}
+
+// "vor 2 h", "vor 3 Tagen"
+export function ago(ms: number): string {
+  const min = Math.max(0, Math.round(ms / 60000))
+  if (min < 1) return 'gerade eben'
+  if (min < 60) return `vor ${min} min`
+  const h = Math.round(min / 60)
+  if (h < 24) return `vor ${h} h`
+  const days = Math.round(h / 24)
+  return days === 1 ? 'vor 1 Tag' : `vor ${days} Tagen`
+}
+
+// Relative to the session folder, for commands the person reads
+async function relative($: EngineInterface, path: string) {
+  const cwd = (await $.session.cwd()).replace(/\/$/, '') + '/'
+  return path.startsWith(cwd) ? path.slice(cwd.length) : path
+}
+
+// The step a notice asks for: the review command into the prompt box, or Claude asked to close the gaps
+async function act($: EngineInterface, n: Notice) {
+  const rel = await relative($, n.path)
+  if (n.kind === 'review') {
+    const command = `/plan-integrate-review ${rel}`
+    const { text } = await $.prompt.read()
+    const { isFilled } = text.trim() ? { isFilled: false } : await $.prompt.fill({ text: command, mode: 'replace' })
+    if (!isFilled) await $.prompt.submit({ text: `Arbeite das neue Review zu ${rel} ein, wie ${command}.` })
+  } else if (n.kind === 'gaps') {
+    await $.prompt.submit({
+      text: `Die Verifikation zu ${rel} meldet Lücken. Lies ${rel.replace(/\.md$/, '.verify.md')} und bessere die Punkte nach.`,
+    })
+  }
+  await update($, notices, list => list.filter(x => x !== n && !(x.path === n.path && x.kind === n.kind)))
+}
+
 // The mode rides on every classic hook's input; keep the latest
 const noteMode = async ($: EngineInterface, value: string | undefined) => {
   if (value && value !== (await read($, mode))) await update($, mode, () => value)
@@ -362,6 +491,17 @@ export const register: Register = on => {
     void $.clock.every(POLL_MS, async () => {
       if ((await read($, plans)).length > 0) await refresh($)
     })
+    // An empty board with a saved one for this branch: offer to pick up where it stopped
+    if (isEmpty(await readBoard($)) && !(await read($, offer))) {
+      try {
+        const { key } = await storeKey($)
+        const snap = (await $.store.get(key)) as Snapshot | undefined
+        if (snap && !isEmpty({ ...snap.board, log: snap.board.log ?? [] })) {
+          await update($, offer, () => snap)
+          void open($)
+        }
+      } catch {}
+    }
     return next(e)
   })
 
@@ -374,7 +514,12 @@ export const register: Register = on => {
   // The board rides at the end of the system prompt, so it never has to be repeated in replies
   on('prompt.compose', async ($, e, next) => {
     const { sections } = await next(e)
-    const text = describeBoard(await readBoard($), await read($, planStatus), await read($, mode), await read($, lastCodeEditAt))
+    const saved = await read($, offer)
+    const text =
+      describeBoard(await readBoard($), await read($, planStatus), await read($, mode), await read($, lastCodeEditAt)) +
+      (saved
+        ? `\nA board saved for branch ${saved.branch || 'this folder'} (${saved.board.thread?.title ?? saved.board.topic?.title ?? 'untitled'}) waits in the pane; the user restores it with Weitermachen.`
+        : '')
     return { sections: [...sections, { id: 'fokusboard:board', text, scope: 'session' }] }
   })
 
@@ -406,12 +551,14 @@ export const register: Register = on => {
     await update($, todos, () => board.todos)
     await update($, decisions, () => board.decisions)
     await update($, artifacts, () => board.artifacts)
+    await update($, log, () => board.log)
     for (const p of change.track_plans ?? []) await maybeTrack($, p, true)
     if (change.untrack_plans?.length) {
       const gone = new Set(await Promise.all(change.untrack_plans.map(async p => planOf(await absolute($, p)))))
       await update($, plans, list => list.filter(p => !gone.has(p)))
     }
     await refresh($)
+    await save($)
     const status = await read($, planStatus)
     // Opens by itself the first time something lands on an empty board
     if (isEmpty(before) && (!isEmpty(board) || status.length > 0)) await open($)
@@ -459,6 +606,11 @@ export const register: Register = on => {
     const status = await read($, planStatus)
     const currentMode = await read($, mode)
     const codeEdit = await read($, lastCodeEditAt)
+    const allLog = await read($, log)
+    const isLogOpen = await read($, showLog)
+    const allNotices = await read($, notices)
+    const saved = await read($, offer)
+    const now = Date.now()
     const doneCount = allTodos.filter(t => t.isDone).length
 
     // One label style for every section: dim uppercase, the count beside it in the section's colour
@@ -621,12 +773,98 @@ export const register: Register = on => {
       )
     }
 
+    // ① A board saved for this branch in an earlier session, offered back
+    const offerCard = saved ? (
+      <Box flexDirection="column" width={inner} borderStyle="round" borderColor="suggestion" paddingX={1} marginBottom={1}>
+        <Text color="suggestion" bold>
+          Weitermachen, wo du aufgehört hast?
+        </Text>
+        <Text dimColor wrap="wrap">
+          {(saved.branch ? `Branch ${saved.branch}` : 'Dieser Ordner') + ' · gespeichert ' + ago(now - saved.savedAt)}
+        </Text>
+        <Text bold wrap="wrap">
+          {saved.board.thread?.title ?? saved.board.topic?.title ?? 'Gespeichertes Board'}
+        </Text>
+        <Text dimColor wrap="wrap">
+          {[
+            saved.board.todos.filter(t => !t.isDone).length && `${saved.board.todos.filter(t => !t.isDone).length} offene Todos`,
+            saved.board.decisions.length && `${saved.board.decisions.length} offene Fragen`,
+            saved.plans.length && `${saved.plans.length} Pläne`,
+          ]
+            .filter(Boolean)
+            .join(' · ') || 'Thema und Zusammenfassung'}
+        </Text>
+        <Box flexDirection="row" gap={2} marginTop={1}>
+          <Button key="restore" label="Weitermachen" hotkey="w" onPress={() => restore($, saved)} />
+          <Button key="discard" label="Verwerfen" plain dimColor onPress={() => discard($)} />
+        </Box>
+      </Box>
+    ) : null
+
+    // ② What changed in a plan outside this session, with the step it asks for
+    const noticeTone = { review: 'warning', gaps: 'error', verified: 'success' } as const
+    const noticeRow = (n: Notice) => (
+      <Box flexDirection="column" width={inner} marginBottom={1}>
+        <Box flexDirection="row" alignItems="flex-start" width={inner}>
+          <Box width={2} flexShrink={0}>
+            <Text color={noticeTone[n.kind]}>●</Text>
+          </Box>
+          <Box flexShrink={1} flexGrow={1}>
+            <Text color={noticeTone[n.kind]} bold wrap="wrap">
+              {n.label}
+            </Text>
+          </Box>
+        </Box>
+        <Box flexDirection="row" paddingLeft={2} gap={2}>
+          {n.kind === 'review' && <Button key={'act:' + n.kind + n.path} label="Einarbeiten" onPress={() => act($, n)} />}
+          {n.kind === 'gaps' && <Button key={'act:' + n.kind + n.path} label="Nachbessern" onPress={() => act($, n)} />}
+          <Button
+            key={'dismiss:' + n.kind + n.path}
+            label="ausblenden"
+            plain
+            dimColor
+            onPress={() => update($, notices, list => list.filter(x => !(x.path === n.path && x.kind === n.kind)))}
+          />
+        </Box>
+      </Box>
+    )
+
+    // ③ The decision log: question, the answer beneath it, when; folded to the latest
+    const shownLog = (isLogOpen ? [...allLog].reverse() : allLog.slice(-1)).slice(0, 30)
+    const logEntry = (x: LogEntry) => (
+      <Box flexDirection="column" width={inner} marginBottom={1}>
+        <Box flexDirection="row" alignItems="flex-start" width={inner}>
+          <Box width={2} flexShrink={0}>
+            <Text color="success">✓</Text>
+          </Box>
+          <Box flexShrink={1} flexGrow={1}>
+            <Text dimColor wrap="wrap">
+              {x.text}
+            </Text>
+          </Box>
+        </Box>
+        <Box flexDirection="row" alignItems="flex-start" width={inner} paddingLeft={2}>
+          <Box width={2} flexShrink={0}>
+            <Text color="success">↳</Text>
+          </Box>
+          <Box flexShrink={1} flexGrow={1}>
+            <Text wrap="wrap">
+              {x.answer || 'beantwortet'}
+              <Text dimColor>{'  · ' + ago(now - x.at)}</Text>
+            </Text>
+          </Box>
+        </Box>
+      </Box>
+    )
+
     // Open work first; finished plans sink to the bottom
     const sorted = [...status].sort((a, b) => Number(stageOf(a, codeEdit).step === 'done') - Number(stageOf(b, codeEdit).step === 'done'))
     const showWorkflow = isPlanMode || status.length > 0
 
     return (
       <Box flexDirection="column" width={inner + 2} padding={1}>
+        {offerCard}
+        {allNotices.map(noticeRow)}
         {threadBlock}
         {topicCard}
         {(th || tp) && <Text> </Text>}
@@ -678,6 +916,22 @@ export const register: Register = on => {
             </Box>
           </Box>
         ))}
+
+        {allLog.length > 0 && (
+          <Box flexDirection="row" width={inner} marginBottom={1}>
+            {header('Entschieden', String(allLog.length), 'success')}
+            {allLog.length > 1 && (
+              <Button
+                key="toggle-log"
+                label={isLogOpen ? ' weniger' : ` alle ${allLog.length}`}
+                plain
+                dimColor
+                onPress={() => update($, showLog, v => !v)}
+              />
+            )}
+          </Box>
+        )}
+        {shownLog.map(logEntry)}
 
         {allTodos.length > 0 && <Box width={inner} marginBottom={1}>{header('Todos', `${doneCount}/${allTodos.length}`, doneCount === allTodos.length ? 'success' : undefined)}</Box>}
         {allTodos.length > 0 && (
