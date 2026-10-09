@@ -49,6 +49,11 @@
       "author": {
         "name": "Marcus Thor"
       }
+    },
+    {
+      "name": "fokusboard",
+      "source": "./plugins/fokusboard",
+      "description": "Side pane with the current topic, open decisions and todos (Claude Code mod)"
     }
   ]
 }
