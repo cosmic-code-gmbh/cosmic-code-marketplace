@@ -3,7 +3,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Artifact, Decision, LogEntry, Notice, PlanStatus, Snapshot, Step, Thread, Todo, Topic } from '../types'
+import type { Artifact, Decision, LogEntry, Note, Notice, PlanStatus, Snapshot, Step, Thread, Todo, Topic } from '../types'
 
 const PANE = 'fokusboard'
 const TITLE = 'Fokusboard'
@@ -23,6 +23,7 @@ const log = atom({ plugin: 'fokusboard', key: 'log' } as const, [] as LogEntry[]
 const showLog = atom({ plugin: 'fokusboard', key: 'showLog' } as const, false)
 const notices = atom({ plugin: 'fokusboard', key: 'notices' } as const, [] as Notice[])
 const offer = atom({ plugin: 'fokusboard', key: 'offer' } as const, null as Snapshot | null)
+const notes = atom({ plugin: 'fokusboard', key: 'notes' } as const, [] as Note[])
 
 const DESCRIPTION = [
   "Keep the user's Fokusboard current: a sidebar that stays in view while the transcript scrolls, showing the current topic, the plan workflow, artifacts, open decisions and the task list.",
@@ -418,11 +419,12 @@ async function save($: EngineInterface) {
   if (await read($, offer)) return
   const board = await readBoard($)
   const tracked = await read($, plans)
-  if (isEmpty(board) && tracked.length === 0) return
+  const own = await read($, notes)
+  if (isEmpty(board) && tracked.length === 0 && own.length === 0) return
   // Saving is a convenience: a store or git that fails never stops the board
   try {
     const { key, branch } = await storeKey($)
-    const snap: Snapshot = { branch, savedAt: Date.now(), board, plans: tracked }
+    const snap: Snapshot = { branch, savedAt: Date.now(), board, plans: tracked, notes: own }
     await $.store.set(key, snap)
   } catch {}
 }
@@ -436,6 +438,8 @@ async function restore($: EngineInterface, snap: Snapshot) {
   await update($, artifacts, () => b.artifacts)
   await update($, log, () => b.log ?? [])
   await update($, plans, () => snap.plans)
+  // Notes typed while the offer waited are kept beside the restored ones
+  await update($, notes, now => [...(snap.notes ?? []), ...now.filter(n => !(snap.notes ?? []).some(m => m.id === n.id))])
   await update($, offer, () => null)
   await refresh($)
 }
@@ -443,6 +447,32 @@ async function restore($: EngineInterface, snap: Snapshot) {
 async function discard($: EngineInterface) {
   await update($, offer, () => null)
   await $.store.delete((await storeKey($)).key)
+}
+
+// ── The person's own notes ───────────────────────────────────────────────────
+
+export function addNote(list: Note[], text: string, now: number): Note[] {
+  const clean = text.trim()
+  if (!clean) return list
+  return [...list, { id: `n${now.toString(36)}${list.length}`, text: clean, isDone: false, at: now }].slice(-50)
+}
+
+export const toggleNote = (list: Note[], id: string): Note[] => list.map(n => (n.id === id ? { ...n, isDone: !n.isDone } : n))
+
+// Open notes first, in the order they were written; finished ones after them
+export const sortNotes = (list: Note[]): Note[] => [...list.filter(n => !n.isDone), ...list.filter(n => n.isDone)]
+
+export function describeNotes(list: Note[]): string {
+  if (list.length === 0) return ''
+  return [
+    "The user's own notes (their list; read them, never change them):",
+    ...list.map(n => `  [${n.isDone ? 'x' : ' '}] ${n.text}`),
+  ].join('\n')
+}
+
+async function changeNotes($: EngineInterface, fn: (list: Note[]) => Note[]) {
+  await update($, notes, fn)
+  await save($)
 }
 
 // "vor 2 h", "vor 3 Tagen"
@@ -496,7 +526,7 @@ export const register: Register = on => {
       try {
         const { key } = await storeKey($)
         const snap = (await $.store.get(key)) as Snapshot | undefined
-        if (snap && !isEmpty({ ...snap.board, log: snap.board.log ?? [] })) {
+        if (snap && (!isEmpty({ ...snap.board, log: snap.board.log ?? [] }) || (snap.notes ?? []).length > 0)) {
           await update($, offer, () => snap)
           void open($)
         }
@@ -515,7 +545,9 @@ export const register: Register = on => {
   on('prompt.compose', async ($, e, next) => {
     const { sections } = await next(e)
     const saved = await read($, offer)
+    const own = describeNotes(await read($, notes))
     const text =
+      (own ? own + '\n' : '') +
       describeBoard(await readBoard($), await read($, planStatus), await read($, mode), await read($, lastCodeEditAt)) +
       (saved
         ? `\nA board saved for branch ${saved.branch || 'this folder'} (${saved.board.thread?.title ?? saved.board.topic?.title ?? 'untitled'}) waits in the pane; the user restores it with Weitermachen.`
@@ -598,6 +630,8 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const elements = $.ui.resolve(e)
     const { Box, Text, Button, Link } = elements
+    // The mobile app draws no text field yet; there the notes are read-only
+    const Input = 'Input' in elements ? elements.Input : undefined
     // The remote surfaces draw vector icons; the terminal has no Svg and gets a glyph
     const Svg = e.surface !== 'terminal' && 'Svg' in elements ? elements.Svg : undefined
     // The terminal frames the whole board; inside it, one cell of padding on every side
@@ -612,6 +646,8 @@ export const register: Register = on => {
     const isLogOpen = await read($, showLog)
     const allNotices = await read($, notices)
     const saved = await read($, offer)
+    const ownNotes = await read($, notes)
+    const ownDone = ownNotes.filter(n => n.isDone).length
     const now = Date.now()
     const doneCount = allTodos.filter(t => t.isDone).length
 
@@ -866,6 +902,50 @@ export const register: Register = on => {
       </Box>
     )
 
+    // The person's own notes and todos: typed here, ticked off here, never touched by Claude
+    const notesBlock = (
+      <Box flexDirection="column" width={inner} marginBottom={1}>
+        <Box width={inner} marginBottom={1}>
+          {header('Meine Notizen', ownNotes.length ? `${ownNotes.length - ownDone}/${ownNotes.length}` : '', ownNotes.length && !ownNotes.some(n => !n.isDone) ? 'success' : undefined)}
+        </Box>
+        {Input && (
+          <Box width={inner}>
+            <Input
+              key={'note-input-' + ownNotes.length}
+              placeholder="Notiz oder Todo hinzufügen…"
+              submitLabel="hinzufügen"
+              onSubmit={(text: string) => changeNotes($, list => addNote(list, text, Date.now()))}
+            />
+          </Box>
+        )}
+        {sortNotes(ownNotes).map(n => (
+          <Box flexDirection="row" alignItems="flex-start" width={inner}>
+            <Box width={3} flexShrink={0}>
+              <Button
+                key={'note-toggle:' + n.id}
+                label={n.isDone ? '✓' : '○'}
+                plain
+                onPress={() => changeNotes($, list => toggleNote(list, n.id))}
+              />
+            </Box>
+            <Box flexShrink={1} flexGrow={1}>
+              <Text wrap="wrap" dimColor={n.isDone} strikethrough={n.isDone}>
+                {n.text}
+              </Text>
+            </Box>
+            <Box flexShrink={0} marginLeft={1}>
+              <Button key={'note-del:' + n.id} label="×" plain dimColor onPress={() => changeNotes($, list => list.filter(x => x.id !== n.id))} />
+            </Box>
+          </Box>
+        ))}
+        {ownDone > 0 && (
+          <Box width={inner} justifyContent="flex-end">
+            <Button key="notes-clear-done" label="erledigte entfernen" plain dimColor onPress={() => changeNotes($, list => list.filter(n => !n.isDone))} />
+          </Box>
+        )}
+      </Box>
+    )
+
     // Open work first; finished plans sink to the bottom
     const sorted = [...status].sort((a, b) => Number(stageOf(a, codeEdit).step === 'done') - Number(stageOf(b, codeEdit).step === 'done'))
     const showWorkflow = isPlanMode || status.length > 0
@@ -887,6 +967,7 @@ export const register: Register = on => {
         {threadBlock}
         {topicCard}
         {(th || tp) && <Text> </Text>}
+        {notesBlock}
 
         {showWorkflow && (
           <Box flexDirection="row" justifyContent="space-between" width={inner} marginBottom={1}>

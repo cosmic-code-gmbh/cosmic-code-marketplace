@@ -7,6 +7,9 @@ export type Thread = { title: string; goal: string }
 
 export type Topic = { title: string; summary: string; points: string[] }
 
+// The person's own note or todo; Claude reads these but never changes them
+export type Note = { id: string; text: string; isDone: boolean; at: number }
+
 // An answered decision, kept so later work can see why things are as they are
 export type LogEntry = { text: string; answer: string; at: number }
 
@@ -19,6 +22,7 @@ export type Snapshot = {
   savedAt: number
   board: { thread: Thread | null; topic: Topic | null; todos: Todo[]; decisions: Decision[]; artifacts: Artifact[]; log: LogEntry[] }
   plans: string[]
+  notes?: Note[]
 }
 
 // A link that matters for the current work: a claude.ai artifact, a PR, a doc
@@ -59,6 +63,7 @@ declare module 'claude-code' {
       showLog: boolean
       notices: Notice[]
       offer: Snapshot | null
+      notes: Note[]
     }
   }
 }

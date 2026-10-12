@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import type { PlanStatus } from '../types'
-import { ago, applyUpdate, asksUser, describeBoard, noticesFor, parseHeaders, pipeline, planOf, stageOf, stillDue, summarize } from '../hooks/register'
+import { addNote, ago, applyUpdate, describeNotes, sortNotes, toggleNote, asksUser, describeBoard, noticesFor, parseHeaders, pipeline, planOf, stageOf, stillDue, summarize } from '../hooks/register'
 
 const SURFACES = ['terminal', 'desktop'] as const
 const TOOL = 'mcp__fokusboard__update'
@@ -108,6 +108,19 @@ describe('board', () => {
     expect(summarize({ topic: { title: 'X', summary: 'y' }, track_plans: ['a'], add_todos: ['a'], decide: [{ id: 'd1', answer: 'z' }] })).toBe(
       'Fokusboard: topic "X", +1 plan, +1 todo, 1 decided',
     )
+  })
+})
+
+describe('own notes', () => {
+  test('notes are added, ticked off, sorted open first and shown to Claude read-only', () => {
+    let list = addNote([], '  Kunde anrufen ', 1)
+    list = addNote(list, '', 2)
+    list = addNote(list, 'Mail an Tim', 3)
+    expect(list.map(n => n.text)).toEqual(['Kunde anrufen', 'Mail an Tim'])
+    list = toggleNote(list, list[0]!.id)
+    expect(sortNotes(list).map(n => n.text)).toEqual(['Mail an Tim', 'Kunde anrufen'])
+    expect(describeNotes(list)).toContain('[x] Kunde anrufen')
+    expect(describeNotes(list)).toContain('never change them')
   })
 })
 
