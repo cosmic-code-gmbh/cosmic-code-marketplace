@@ -526,3 +526,18 @@ describe('session', () => {
     expect((await $.classic.Stop({ ...asking, stop_hook_active: true })).block).toBeUndefined()
   })
 })
+
+describe('footer switch', () => {
+  test('◎ Fokus sits beside the mode labels and opens, then closes the board', async ($, on) => {
+    let isUp = false
+    on('ui.panes', () => ({ value: isUp ? [{ id: 'fokusboard' }] : [] }))
+    on('ui.open', () => ((isUp = true), { value: { isPlaced: true } }))
+    on('ui.close', () => ((isUp = false), { value: undefined }))
+    const ui = await $.ui.mount({ plugin: 'fokusboard', surface: 'terminal', component: 'SessionMode', props: { modes: ['focus'] } })
+    expect(await texts(ui)).toContain('focus')
+    await ui.press({ key: 'fokus-toggle' })
+    expect(isUp).toBe(true)
+    await ui.press({ key: 'fokus-toggle' })
+    expect(isUp).toBe(false)
+  })
+})

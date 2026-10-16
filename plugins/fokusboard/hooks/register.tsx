@@ -373,6 +373,13 @@ const FOCUS_ICON =
 
 const open = ($: EngineInterface) => $.ui.open({ id: PANE, title: TITLE })
 
+// The footer switch: closes the board when it is open, else refreshes and opens it
+const toggle = async ($: EngineInterface) => {
+  if ((await $.ui.panes()).some(p => p.id === PANE)) return void (await $.ui.close({ id: PANE }))
+  await refresh($)
+  await open($)
+}
+
 // Puts "Zu „…“: " in the prompt box so the person types the answer right after it
 async function replyTo($: EngineInterface, d: Decision) {
   const lead = `Zu „${d.text}“: `
@@ -626,6 +633,19 @@ export const register: Register = on => {
   on('ui.render', { component: 'ToolResult', props: { tool: TOOL } }, async ($, e, next) =>
     e.props.isErrored ? next(e) : $.ui.resolve(e).Text({ children: [''] }),
   )
+
+  // "◎ Fokus" beside the footer's mode labels (`focus`, …): one click opens or closes the board
+  on('ui.render', { component: 'SessionMode' }, async ($, e) => {
+    const { Box, Text, Button } = $.ui.resolve(e)
+    return (
+      <Box flexDirection="row" gap={1}>
+        {e.props.modes.length > 0 && <Text dimColor>{e.props.modes.join(' & ')}</Text>}
+        <Button key="fokus-toggle" plain dimColor onPress={() => toggle($)}>
+          ◎ Fokus
+        </Button>
+      </Box>
+    )
+  })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const elements = $.ui.resolve(e)
