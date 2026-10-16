@@ -6,7 +6,7 @@ Vier gemeinsame Skills für Claude Code und Codex. Die Anweisungen liegen direkt
 | Schritt | Ergebnis |
 | --- | --- |
 | `plan-review` | Prüft einen Plan gegen den tatsächlichen Code und schreibt eine benachbarte `.review.md`. |
-| `plan-integrate-review` | Arbeitet das Review in den Plan ein oder lehnt Punkte begründet ab; erhöht die Plan-Version. |
+| `plan-integrate-review` | Prüft Review-Befunde, arbeitet sie ein, lehnt sie begründet ab oder dokumentiert offene Entscheidungen. |
 | `plan-verify` | Prüft die Implementierung gegen den Plan und schreibt eine benachbarte `.verify.md`. |
 | `plan-status` | Zeigt Plan-Version, letztes Review und Einarbeitungsstatus als Tabelle. |
 
@@ -89,7 +89,11 @@ bleiben im jeweiligen Projekt. Empfohlene Header:
 | Plan | `Plan Version #M` |
 | Review | `Review Version #N` |
 | Plan nach Einarbeitung | `Plan Version #M — Review #N eingearbeitet` |
+| Plan bei offenen Review-Punkten | `Plan Version #M — Review #N teilweise eingearbeitet` |
 | Verifikation | `Verifikation gegen Plan Version #M — Ergebnis: vollständig / Lücken / unvollständig` |
+
+Wiederholte Einarbeitung desselben bereits verarbeiteten Reviews ohne neuen Änderungsbedarf
+lässt Plan und Version unverändert. Teilweise eingearbeitete Reviews bleiben in `plan-status` offen.
 
 Projektlokale Skills oder Commands mit denselben Namen bei der Umstellung entfernen,
 nachdem die globale Installation funktioniert. So bleiben keine veralteten Kopien aktiv.

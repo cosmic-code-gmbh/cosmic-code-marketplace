@@ -18,9 +18,10 @@ Projekt auf.
 1. Liste alle Plandateien direkt im gewählten Verzeichnis: alle `*.md`, **aber ohne** die abgeleiteten Dateien
    `*.review.md` und `*.verify.md`. Jede verbleibende `<name>.md` ist eine Arbeitseinheit.
    Falls das Verzeichnis fehlt oder leer ist: sag das und beende.
-2. Lies je Plan:
-   - Aus dem Plan-Header die **Plan Version** (z. B. `Plan Version #3`; ohne Header: `—`).
-   - Aus dem Plan-Header die zuletzt **eingearbeitete Review-Nr** (aus
+2. Lies je Plan (für aktuelle Plan- und Einarbeitungsangaben vorrangig die letzte Versionszeile
+   am Dateiende, andernfalls den aktuellen Plan-Header; historische Changelog-Einträge ignorieren):
+   - Die aktuelle **Plan Version** (z. B. `Plan Version #3`; ohne Versionsangabe: `—`).
+   - Die zuletzt vollständig **eingearbeitete Review-Nr** (aus
      `Plan Version #M — Review #N eingearbeitet`; ohne diesen Vermerk: keine eingearbeitet).
    - Aus der zugehörigen `<name>.review.md` die zuletzt vergebene **Review Version #N**
      (höchste/letzte im Header). Existiert keine `.review.md`: kein Review.
@@ -30,6 +31,7 @@ Projekt auf.
      **gleich** der letzten Review-Nr der `.review.md` ist.
    - ⚠️ **Review offen** sonst (Review existiert, aber neuer als das, was eingearbeitet wurde —
      oder noch gar nicht eingearbeitet).
+     Auch `Review #N teilweise eingearbeitet` gilt als offen.
 
 ## Ausgabe (genau diese Tabelle)
 
