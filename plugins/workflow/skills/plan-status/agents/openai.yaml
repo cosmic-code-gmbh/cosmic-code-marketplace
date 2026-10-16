@@ -1,0 +1,4 @@
+interface:
+  display_name: "Plan Status"
+  short_description: "Show plan versions and review integration status."
+  default_prompt: "$plan-status"

@@ -1,6 +1,6 @@
 # Cosmic Code Marketplace
 
-Collection of production-ready Claude Code plugins for development workflows.
+Collection of Claude Code plugins for development workflows, with shared workflow skills for Codex.
 
 ## 📦 Available Plugins
 
@@ -48,11 +48,16 @@ Development toolkit (1 command + 2 skills):
 - Validate and package skills for distribution
 - Bundled scripts: `init_skill.py`, `package_skill.py`, `quick_validate.py`
 
+### Workflow
+
+Plan review, review integration, implementation verification, and plan status for Claude Code and Codex.
+See [Workflow setup and usage](plugins/workflow/README.md) for installation on each computer and updates.
+
 ## 🚀 Installation
 
 ### 1. Add Marketplace
 ```bash
-/plugin marketplace add marcusthor/cosmic-code-marketplace
+/plugin marketplace add cosmic-code-gmbh/cosmic-code-marketplace
 ```
 
 ### 2. Install Plugins
@@ -63,9 +68,10 @@ Development toolkit (1 command + 2 skills):
 /plugin install research@cosmic-code-marketplace
 /plugin install supabase-toolkit@cosmic-code-marketplace
 /plugin install development@cosmic-code-marketplace
+/plugin install workflow@cosmic-code-marketplace --scope user
 
 # Or install all
-/plugin install analysis@cosmic-code-marketplace design@cosmic-code-marketplace research@cosmic-code-marketplace supabase-toolkit@cosmic-code-marketplace development@cosmic-code-marketplace
+/plugin install analysis@cosmic-code-marketplace design@cosmic-code-marketplace research@cosmic-code-marketplace supabase-toolkit@cosmic-code-marketplace development@cosmic-code-marketplace workflow@cosmic-code-marketplace
 ```
 
 ### 3. Verify Installation
@@ -141,7 +147,7 @@ Use tickets to:
 ### Clone to another machine
 ```bash
 # Add marketplace once
-/plugin marketplace add marcusthor/cosmic-code-marketplace
+/plugin marketplace add cosmic-code-gmbh/cosmic-code-marketplace
 
 # Install desired plugins
 /plugin install analysis@cosmic-code-marketplace
@@ -155,7 +161,7 @@ Add to `.claude/settings.json`:
     "cosmic-code-marketplace": {
       "source": {
         "source": "github",
-        "repo": "marcusthor/cosmic-code-marketplace"
+        "repo": "cosmic-code-gmbh/cosmic-code-marketplace"
       }
     }
   },

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Plan Integrate Review"
+  short_description: "Incorporate review findings into an implementation plan."
+  default_prompt: "$plan-integrate-review <pfad/zur/plandatei.md>"

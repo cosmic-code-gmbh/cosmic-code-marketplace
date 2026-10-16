@@ -1,0 +1,11 @@
+{
+  "name": "workflow",
+  "description": "Plan review, review integration, implementation verification, and plan status for Claude Code and Codex.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Marcus Thor"
+  },
+  "homepage": "https://github.com/cosmic-code-gmbh/cosmic-code-marketplace",
+  "repository": "https://github.com/cosmic-code-gmbh/cosmic-code-marketplace",
+  "license": "MIT"
+}

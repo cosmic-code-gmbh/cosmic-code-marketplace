@@ -1,0 +1,4 @@
+interface:
+  display_name: "Plan Review"
+  short_description: "Review an implementation plan from a Markdown path."
+  default_prompt: "$plan-review <pfad/zur/plandatei.md>"

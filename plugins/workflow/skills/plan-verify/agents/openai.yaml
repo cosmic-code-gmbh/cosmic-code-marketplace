@@ -1,0 +1,4 @@
+interface:
+  display_name: "Plan Verify"
+  short_description: "Verify implemented code against a plan Markdown path."
+  default_prompt: "$plan-verify <pfad/zur/plandatei.md>"

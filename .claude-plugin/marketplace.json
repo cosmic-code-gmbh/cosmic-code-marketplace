@@ -54,6 +54,15 @@
       "name": "fokusboard",
       "source": "./plugins/fokusboard",
       "description": "Side pane with the current topic, open decisions and todos (Claude Code mod)"
+    },
+    {
+      "name": "workflow",
+      "source": "./plugins/workflow",
+      "description": "Plan review, review integration, implementation verification, and plan status for Claude Code and Codex.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Marcus Thor"
+      }
     }
   ],
   "description": "Claude-Code-Plugins und Mods der Cosmic Code GmbH"
