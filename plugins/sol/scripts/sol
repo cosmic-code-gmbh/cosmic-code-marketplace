@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Run one read-only GPT Sol review turn through the local Codex CLI (Codex subscription).
+# Used by the sol-loop, sol-plan and council skills of this plugin. Brief comes from stdin.
+#
+#   scripts/sol -C <repo> < brief.txt                 # round 1: new Codex thread
+#   scripts/sol -C <repo> --resume <thread> < next.txt # later rounds: same thread
+#
+# Prints SOL_THREAD=<id>, SOL_USAGE=<json>, then Sol's final message.
+set -euo pipefail
+
+repo="$PWD" resume="" effort="${SOL_EFFORT:-high}" model="${SOL_MODEL:-}"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -C) repo="$2"; shift 2 ;;
+    --resume) resume="$2"; shift 2 ;;
+    --effort) effort="$2"; shift 2 ;;
+    --model) model="$2"; shift 2 ;;
+    *) echo "sol: unknown arg $1" >&2; exit 2 ;;
+  esac
+done
+
+out="$(mktemp -t sol)" events="$(mktemp -t sol-events)"
+trap 'rm -f "$out" "$events"' EXIT
+
+args=(--json -o "$out" -c "model_reasoning_effort=\"$effort\"")
+[[ -n "$model" ]] && args+=(-m "$model")
+
+cd "$repo"
+if [[ -n "$resume" ]]; then
+  codex exec resume "$resume" "${args[@]}" - >"$events"
+else
+  codex exec -s read-only "${args[@]}" - >"$events"
+fi
+
+thread="$(grep -o '"thread_id":"[^"]*"' "$events" | head -1 | cut -d'"' -f4)"
+echo "SOL_THREAD=${thread:-$resume}"
+echo "SOL_USAGE=$(grep '"turn.completed"' "$events" | tail -1 | grep -o '"usage":{[^}]*}' || true)"
+echo
+cat "$out"

@@ -53,6 +53,13 @@ Development toolkit (1 command + 2 skills):
 Plan review, review integration, implementation verification, and plan status for Claude Code and Codex.
 See [Workflow setup and usage](plugins/workflow/README.md) for installation on each computer and updates.
 
+### Sol
+
+GPT Sol as reviewer from Claude Code via the Codex CLI and the Codex subscription:
+"sol loop" for code changes, "sol loop plan" / "sol loop verify" for the plan workflow,
+plus the tstack PR skills (full send, full stop, council, takeover, …).
+See [Sol setup and usage](plugins/sol/README.md).
+
 ## 🚀 Installation
 
 ### 1. Add Marketplace
