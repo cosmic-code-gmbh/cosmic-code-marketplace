@@ -68,7 +68,7 @@
       "name": "sol",
       "source": "./plugins/sol",
       "description": "GPT Sol as reviewer from Claude Code via the Codex CLI: sol loop for code, sol loop plan / verify for the plan workflow, plus Theo's tstack PR skills.",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "author": {
         "name": "Marcus Thor"
       }

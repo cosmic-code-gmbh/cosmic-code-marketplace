@@ -36,6 +36,28 @@ und Sol den absoluten Pfad geben. Fehlt das Plugin: melden und abbrechen.
   Anforderung (Verify) mit Beleg offen bleibt, oder auf Wunsch.
 - Früh stoppen, wenn nur `[optional]` übrig ist.
 - Ledger führen: Runde, Befund, Schweregrad, Entscheidung, `SOL_USAGE`.
+- Der Schlusslauf (siehe unten) zählt nicht zum Budget.
+
+## Schlusslauf
+
+Ab Runde 2 prüft Sol nur noch Delta und offene Befunde. Was Runde 1 übersehen hat
+oder was eine spätere Korrektur neu kaputt macht, bleibt so unsichtbar. Deshalb
+gilt ein Ergebnis erst nach einem **Schlusslauf** als fertig:
+
+```
+Runde 1     komplett          ──► Befunde
+Runde 2+    Delta (resume)    ──► bis APPROVE / vollständig
+Schlusslauf komplett, OHNE --resume (neuer Thread, keine Vorurteile)
+            ├─ nichts Neues   ──► fertig
+            └─ neue Befunde   ──► Delta-Runden, danach erneut Schlusslauf
+```
+
+- Gleicher Brief wie Runde 1, plus: „Schlussprüfung: alles prüfen, nicht nur
+  Änderungen. Frühere Runden kennst du nicht.“
+- Nur wenn Runde 1 schon das Endergebnis war (APPROVE bzw. `vollständig` ohne
+  Änderung dazwischen), entfällt er.
+- Höchstens zwei Schlussläufe; findet auch der zweite Neues, Stand an Marcus
+  melden statt weiterzuschleifen.
 
 ## sol loop plan
 
@@ -67,7 +89,7 @@ Letzte Zeile: VERDICT: APPROVE (kein [kritisch]/[wichtig] offen) oder CHANGES.
 offene Befunde prüfen und je alten Befund `erledigt` oder `weiter offen: <Grund>`
 sagen. Gleiche Antwortform.
 
-**Fertig:** APPROVE auf die aktuelle Plan-Version und nichts `Offen:`. Dann ist
+**Fertig:** APPROVE im Schlusslauf auf die aktuelle Plan-Version und nichts `Offen:`. Dann ist
 der Plan umsetzungsbereit. **Nicht mit der Umsetzung beginnen**, das braucht
 Marcus' Go.
 
@@ -103,11 +125,11 @@ Zeile "Verifikation gegen Plan Version #M — Ergebnis: …") als Antwort zurüc
 **Ab Runde 2 (resume):** was geschlossen wurde, neue Prüfergebnisse, nur offene
 Punkte und geänderter Code.
 
-**Fertig:** Ergebnis `vollständig`. Nicht committen, nicht deployen.
+**Fertig:** Ergebnis `vollständig` im Schlusslauf. Nicht committen, nicht deployen.
 
 ## Bericht
 
-Runden, Modell, Plan-Version vorher → nachher, was Sol geändert hat
+Runden (Schlusslauf getrennt ausweisen), Modell, Plan-Version vorher → nachher, was Sol geändert hat
 (eingearbeitet / abgelehnt mit Grund / offen), bei verify geschlossene Lücken und
 Prüfergebnisse, `SOL_USAGE` je Runde (sonst „nicht gemeldet“), Endstand:
 Plan: `Plan Version #M — Review #N eingearbeitet`; Verify: letzte Zeile der `.verify.md`.
