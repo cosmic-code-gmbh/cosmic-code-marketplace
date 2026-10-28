@@ -40,10 +40,18 @@ brief() {
 
 cd "$work"
 export TMPDIR="$work"
+status=0
 if [[ -n "$resume" ]]; then
-  brief | codex exec resume "$resume" "${args[@]}" - >"$events"
+  brief | codex exec resume "$resume" "${args[@]}" - >"$events" 2>>"$events" || status=$?
 else
-  brief | codex exec "${args[@]}" - >"$events"
+  brief | codex exec "${args[@]}" - >"$events" 2>>"$events" || status=$?
+fi
+# A failed run (usage limit, unknown thread, network) would otherwise exit
+# silently: the trap deletes the events with the reason. Name the reason first.
+if [[ $status -ne 0 ]]; then
+  reason="$(grep -o '"message":"[^"]*"' "$events" | tail -3 | cut -d'"' -f4)"
+  echo "sol: codex exited $status — ${reason:-$(tail -5 "$events")}" >&2
+  exit "$status"
 fi
 
 thread="$(grep -o '"thread_id":"[^"]*"' "$events" | head -1 | cut -d'"' -f4)"

@@ -39,8 +39,9 @@ und Sol den absoluten Pfad geben. Fehlt das Plugin: melden und abbrechen.
 - 3 Runden. Bis 5 nur, wenn ein `[kritisch]` (Plan) bzw. ❌/⚠️ an einer zentralen
   Anforderung (Verify) mit Beleg offen bleibt, oder auf Wunsch.
 - Früh stoppen, wenn nur `[optional]` übrig ist.
-- Ledger führen: Runde, Befund, Schweregrad, Entscheidung, `SOL_USAGE`.
-- Der Schlusslauf (siehe unten) zählt nicht zum Budget.
+- Ledger führen: Runde, Schlusslauf N/2, Befund, Schweregrad, Entscheidung, `SOL_USAGE`.
+- Schlussläufe (siehe unten) haben ein eigenes, hartes Budget: **2**. Danach
+  entscheidet Marcus.
 
 ## Schlusslauf
 
@@ -49,19 +50,21 @@ oder was eine spätere Korrektur neu kaputt macht, bleibt so unsichtbar. Deshalb
 gilt ein Ergebnis erst nach einem **Schlusslauf** als fertig:
 
 ```
-Runde 1     komplett          ──► Befunde
-Runde 2+    Delta (knapper Brief) ──► bis APPROVE / vollständig
-Schlusslauf komplett, voller Brief, ohne frühere Befunde (keine Vorurteile)
-            ├─ nichts Neues   ──► fertig
-            └─ neue Befunde   ──► Delta-Runden, danach erneut Schlusslauf
+Runde 1          komplett               ──► Befunde
+Runde 2+         Delta (knapper Brief)  ──► bis APPROVE / vollständig
+Schlusslauf 1/2  komplett, voller Brief, ohne frühere Befunde (keine Vorurteile)
+                 ├─ nichts Neues        ──► fertig
+                 └─ neue Befunde        ──► Delta-Runden ──► Schlusslauf 2/2
+Schlusslauf 2/2  ├─ nichts Neues        ──► fertig
+                 └─ neue Befunde        ──► STOPP: einarbeiten, Stand an Marcus, kein weiterer Lauf
 ```
 
-- Gleicher Brief wie Runde 1, plus: „Schlussprüfung: alles prüfen, nicht nur
-  Änderungen. Frühere Runden kennst du nicht.“
+- Gleicher Brief wie Runde 1, plus: „Schlussprüfung N von 2: alles prüfen, nicht nur
+  Änderungen. Frühere Runden kennst du nicht.“ Die Zahl steht im Brief, damit sie
+  bei jedem Lauf im Kontext ist.
 - Nur wenn Runde 1 schon das Endergebnis war (APPROVE bzw. `vollständig` ohne
   Änderung dazwischen), entfällt er.
-- Höchstens zwei Schlussläufe; findet auch der zweite Neues, Stand an Marcus
-  melden statt weiterzuschleifen.
+- Ein dritter Schlusslauf braucht Marcus' ausdrückliches Ja.
 
 ## sol loop plan
 
@@ -109,6 +112,12 @@ Marcus' Go.
 ## sol loop verify
 
 Voraussetzung: Umsetzung liegt im Arbeitsbaum.
+
+**Vor Runde 1: Selbstprüfung.** Grüne Gates heißen nicht planvollständig. Claude
+lädt `plan-verify` und wendet es selbst an: jeden Planpunkt und jeden Fall der
+Testliste des Plans mit Datei:Zeile abhaken, auch Teile, die Subagenten gebaut
+haben (deren Bericht ersetzt den Abgleich nicht). Lücken schließen. Sol startet
+erst, wenn die eigene Tabelle kein ❌ mehr hat; offene ⚠️ mit Grund in den Brief.
 
 **Vor jeder Runde** die Prüfungen selbst laufen lassen, die der Plan und das
 Projekt verlangen (tsc, vitest, ggf. Browser-Verify), und die Ergebnisse in den
