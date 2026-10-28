@@ -58,7 +58,8 @@ wrapper (see below). If no route runs Sol, report the blocker. Do not
 substitute a model.
 
 **Claude Code route.** `scripts/sol` sits two levels above this skill's base
-directory. It runs one read-only Codex turn on the Codex subscription. One Bash
+directory. It runs one Codex turn on the Codex subscription: Sol reads the repo, writes
+only into its own scratch dir, so it can run tests but never edit the repo. One Bash
 call per round with `run_in_background: true`, brief on stdin:
 `<plugin>/scripts/sol -C <repo> < brief.txt`; later rounds add
 `--resume <SOL_THREAD>`. Output: `SOL_THREAD=`, `SOL_USAGE=` (ledger), then

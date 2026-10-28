@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Run one read-only GPT Sol review turn through the local Codex CLI (Codex subscription).
+# Run one GPT Sol review turn through the local Codex CLI (Codex subscription): reads the
+# repo, writes only into its own scratch dir (so it can run tests), never into the repo.
 # Used by the sol-loop, sol-plan and council skills of this plugin. Brief comes from stdin.
 #
 #   scripts/sol -C <repo> < brief.txt                 # round 1: new Codex thread
@@ -20,16 +21,29 @@ while [[ $# -gt 0 ]]; do
 done
 
 out="$(mktemp -t sol)" events="$(mktemp -t sol-events)"
-trap 'rm -f "$out" "$events"' EXIT
+# Sol's only writable place: the sandbox's working dir. TMPDIR points into it so
+# test runners (vitest, tsc --incremental) can create their temp files. The repo
+# is readable but neither the working dir nor an added dir, so it stays unwritable.
+work="$(mktemp -d -t sol-work)"
+trap 'rm -rf "$out" "$events" "$work"' EXIT
+repo="$(cd "$repo" && pwd)"
 
-args=(--json -o "$out" -c "model_reasoning_effort=\"$effort\"")
+args=(--json -o "$out" -c "model_reasoning_effort=\"$effort\"" -c 'sandbox_mode="workspace-write"' --skip-git-repo-check)
 [[ -n "$model" ]] && args+=(-m "$model")
 
-cd "$repo"
+brief() {
+  echo "Repository (read-only for you): $repo — run commands there with \`cd $repo && …\`. Writable scratch: $work (TMPDIR)."
+  echo "Tests work: vitest with \`--configLoader runner\`, tsc with \`--incremental false\` (anything else writing into the repo fails)."
+  echo
+  cat
+}
+
+cd "$work"
+export TMPDIR="$work"
 if [[ -n "$resume" ]]; then
-  codex exec resume "$resume" "${args[@]}" - >"$events"
+  brief | codex exec resume "$resume" "${args[@]}" - >"$events"
 else
-  codex exec -s read-only "${args[@]}" - >"$events"
+  brief | codex exec "${args[@]}" - >"$events"
 fi
 
 thread="$(grep -o '"thread_id":"[^"]*"' "$events" | head -1 | cut -d'"' -f4)"

@@ -22,8 +22,12 @@ in `.claude/plans/`). Bei Zweifel fragen.
 Über `scripts/sol` dieses Plugins (zwei Ebenen über dem Basisverzeichnis dieses
 Skills), wie im `sol-loop`-Skill unter „Claude Code route“: `<plugin>/scripts/sol -C <repo>`,
 Brief über stdin, Bash mit `run_in_background: true`, auf die Meldung warten, nicht
-pollen. Ab Runde 2 `--resume <SOL_THREAD>`. Sol ist read-only und schreibt keine
-Dateien. Kein Sol erreichbar: melden, kein Ersatzmodell.
+pollen. Jede Runde ist ein neuer Thread (kein `--resume`): ein fortgesetzter Thread
+schleppt den ganzen Verlauf mit und kostet pro Runde Millionen Tokens; der
+Delta-Brief trägt stattdessen das Nötige als Text. Sol liest das Repo und schreibt
+nur in sein eigenes Arbeitsverzeichnis, kann also Tests laufen lassen
+(`vitest --configLoader runner`, `tsc --incremental false`). Kein Sol erreichbar:
+melden, kein Ersatzmodell.
 
 Prüfregeln sind die SKILL.md-Dateien des `workflow`-Plugins aus demselben
 Marketplace. Pfad auflösen mit
@@ -46,8 +50,8 @@ gilt ein Ergebnis erst nach einem **Schlusslauf** als fertig:
 
 ```
 Runde 1     komplett          ──► Befunde
-Runde 2+    Delta (resume)    ──► bis APPROVE / vollständig
-Schlusslauf komplett, OHNE --resume (neuer Thread, keine Vorurteile)
+Runde 2+    Delta (knapper Brief) ──► bis APPROVE / vollständig
+Schlusslauf komplett, voller Brief, ohne frühere Befunde (keine Vorurteile)
             ├─ nichts Neues   ──► fertig
             └─ neue Befunde   ──► Delta-Runden, danach erneut Schlusslauf
 ```
@@ -70,6 +74,9 @@ Lies die Prüfregeln in <abs path plan-review/SKILL.md> und wende sie an.
 Schreibe die Review-Datei NICHT. Gib den vollständigen Review-Inhalt
 (Abschnitte 1–5, ohne die Zeile "Review Version #N") als Antwort zurück.
 Halte den Plan klein: unnötigen Umfang als Befund markieren, nicht ergänzen.
+Verifikationsanforderungen, die Zugangsdaten, echte Drittdienste oder großen
+Mock-Aufwand brauchen, als [wichtig] markieren: sie werden vor der Umsetzung
+entschieden, nicht erst im Verify.
 Letzte Zeile: VERDICT: APPROVE (kein [kritisch]/[wichtig] offen) oder CHANGES.
 ```
 
@@ -83,11 +90,17 @@ Letzte Zeile: VERDICT: APPROVE (kein [kritisch]/[wichtig] offen) oder CHANGES.
    Nicht zustimmen, nur um die Schleife zu beenden.
 3. Punkte, die eine Entscheidung von Marcus brauchen (`Offen:`), beenden die
    Schleife: mit `AskUserQuestion` fragen, die Frage ins Fokusboard, danach weiter.
+4. Jede Verifikationsanforderung, die ohne Zugangsdaten oder ohne
+   unverhältnismäßigen Mock-Aufwand nicht zu erbringen ist, bekommt im Plan einen
+   Platz: umsetzbar machen, als `Zurückgestellt` mit Grund (dann zählt sie im
+   Verify nicht als Lücke) oder als `Offen:` an Marcus. Sonst meldet jede
+   Verify-Runde dieselbe Lücke.
 
-**Ab Runde 2 (resume):** Neue Plan-Version, Changelog der Einarbeitung
-(`Geändert` / `Bewusst abgelehnt` + Begründung). Sol soll nur Änderungen und
-offene Befunde prüfen und je alten Befund `erledigt` oder `weiter offen: <Grund>`
-sagen. Gleiche Antwortform.
+**Ab Runde 2 (Delta):** neuer Thread, Brief wie Runde 1 ohne die Prüfregeln-Zeile,
+dazu die Befundliste der letzten Runde als Text (aus `<name>.review.md`), die neue
+Plan-Version und der Changelog der Einarbeitung (`Geändert` / `Bewusst abgelehnt` +
+Begründung). Sol prüft nur Änderungen und diese Befunde und sagt je Befund
+`erledigt` oder `weiter offen: <Grund>`. Gleiche Antwortform.
 
 **Fertig:** APPROVE im Schlusslauf auf die aktuelle Plan-Version und nichts `Offen:`. Dann ist
 der Plan umsetzungsbereit. **Nicht mit der Umsetzung beginnen**, das braucht
@@ -98,8 +111,9 @@ Marcus' Go.
 Voraussetzung: Umsetzung liegt im Arbeitsbaum.
 
 **Vor jeder Runde** die Prüfungen selbst laufen lassen, die der Plan und das
-Projekt verlangen (tsc, vitest, ggf. Browser-Verify); Sol kann im Read-only-Modus
-nicht zuverlässig testen. Ergebnisse in den Brief.
+Projekt verlangen (tsc, vitest, ggf. Browser-Verify), und die Ergebnisse in den
+Brief schreiben. Sol kann gezielt nachtesten; Browser und Dienste mit
+Zugangsdaten bleiben bei Claude.
 
 **Brief an Sol:**
 
@@ -122,8 +136,10 @@ Zeile "Verifikation gegen Plan Version #M — Ergebnis: …") als Antwort zurüc
 3. Abweichung vom Plan, die eine Entscheidung braucht: fragen wie oben, nicht
    eigenmächtig den Plan umschreiben.
 
-**Ab Runde 2 (resume):** was geschlossen wurde, neue Prüfergebnisse, nur offene
-Punkte und geänderter Code.
+**Ab Runde 2 (Delta):** neuer Thread, Brief wie oben ohne die Prüfregeln-Zeile,
+dazu die nicht-✅-Zeilen der letzten Prüftabelle als Text (aus `<name>.verify.md`),
+was geschlossen wurde, neue Prüfergebnisse und der Änderungssatz seit der letzten
+Runde.
 
 **Fertig:** Ergebnis `vollständig` im Schlusslauf. Nicht committen, nicht deployen.
 
