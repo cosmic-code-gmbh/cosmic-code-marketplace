@@ -268,14 +268,15 @@ export default class Agents extends View {
     });
   }
 
-  subRow(t, s, shown, compact) {
+  // indent: where the tree line starts, under the middle of the parent's program icon.
+  subRow(t, s, shown, compact, indent) {
     const k = s.t;
     const st = kidStatus(k, this.listed);
     const pic = icon(k.program, 14, t.foreground);
     const on = k.address === shown;
     return h_flex()
       .id(`sub-${k.address}`)
-      .pl(39)
+      .pl(indent)
       .pr(8)
       .rounded(8)
       .h(26)
@@ -350,11 +351,17 @@ export default class Agents extends View {
     list = bySpaceStatus ? [...pinned, ...spaced] : [...pinned, ...later, ...rest, ...archived];
     setAgentOrder(list.map((a) => a.address));
 
+    // Rows without a space header above (priority, pinned, global shelves) name their space.
+    const showsSpace = (a) => byPriority || (a.pinned && !onShelf(a)) || (!bySpaceStatus && onShelf(a));
+
     const withKids = (a, i) => {
       const subs = collapsed ? [] : this.tree(all, a.address);
       const r = row(a, i, subs);
       if (this.folded.has(a.address)) return [r];
-      return [r, ...subs.map((s) => this.subRow(t, s, shown, sectioned))];
+      // The parent's program icon (16 px) sits at 8 px, or after the space icon when the
+      // row shows one: the line starts under its middle.
+      const indent = showsSpace(a) ? 40 : 15;
+      return [r, ...subs.map((s) => this.subRow(t, s, shown, sectioned, indent))];
     };
 
     // The fold chevron; folded, the count too, colored by the most urgent one.
@@ -472,7 +479,7 @@ export default class Agents extends View {
         ["mods/workspace-chrome/archive.svg", "mods/agents-icons/archive-restore.svg"], ["Archive", "Take out of Archive"]);
       // Under a space header the space goes without saying; an automatic tab number says nothing.
       // Without a space header above (priority, pinned, follow up) the row names its space.
-      const full = byPriority || isPinned || (!bySpaceStatus && (isLater || isArchived));
+      const full = showsSpace(a);
       // Without a space header, the space's icon or letter says which space.
       const sp = full ? spacePic(a, 16) : null;
       const name = more ?? (/^\d+$/.test(label(a)) ? a.program?.name || label(a) : label(a));
