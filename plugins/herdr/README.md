@@ -9,7 +9,7 @@ plugin herdr                               mods/tabs-run      top bar: "Artefakt
   hooks/bridge.ts ── every Artifact ──┐    mods/artifacts     the dropdown
   (PostToolUse)      publish          │    mods/fokus         the Fokus sidebar (see below)
                                       │    mods/spaces-icons  Spaces sidebar with app icons per space
-                                      │    mods/agents-icons  Agents list: space icons, hidden helpers
+                                      │    mods/agents-icons  Agents list: space icons, helpers, shelves
                                       │    mods/menu-icons    space menu: Choose / Remove icon
                                       │    layouts/main-filetree.json
   skill artifacts-refresh ──┐         │    settings.json, keys.json
@@ -47,6 +47,21 @@ Claude terminal (HC_TERMINAL_ID=t20)
 Codex runs started by `scripts/sol` read "Sol". Subagents (Agent tool, `/simplify`, workflows)
 carry the Agent call's description when there is one, else their type. Restart Claude Code
 sessions after installing so the hooks load.
+
+## Follow up and Archive
+
+Two shelves in the Agents list that only you fill. Hover a row: list icon = Follow up,
+box icon = Archive, pin = Pin. The same button on a shelved row puts it back.
+
+```
+Follow up   work is left for you (test, a manual step)    shared agents.followUp
+Done · Working · Idle · Needs you   as before
+Archive     out of sight, folded; shows a spinner or !    shared agents.archive
+            when an archived agent works or needs you
+```
+
+An agent sits on one shelf at most, and a shelf wins over a pin. Addresses whose terminal
+ended drop off. Section names are plain text in their state's color.
 
 ## The Fokus sidebar
 
