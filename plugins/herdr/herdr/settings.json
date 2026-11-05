@@ -1,0 +1,11 @@
+{
+  "zoom": 1.0,
+  "font": "MesloLGS Nerd Font Mono",
+  "font_size": 12,
+  "sounds": {
+    "enabled": true
+  },
+  "font_ligatures": false,
+  "minimum_contrast": 1.0,
+  "appearance": "dark"
+}

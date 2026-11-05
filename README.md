@@ -60,6 +60,12 @@ GPT Sol as reviewer from Claude Code via the Codex CLI and the Codex subscriptio
 plus the tstack PR skills (full send, full stop, council, takeover, …).
 See [Sol setup and usage](plugins/sol/README.md).
 
+### Herdr
+
+Marcus' Herdr desktop setup: the "Artefakte ▾" dropdown with every claude.ai artifact (live hook, pins, search),
+the tabs-run top bar, the main-filetree layout, settings and keys.
+See [Herdr setup](plugins/herdr/README.md).
+
 ## 🚀 Installation
 
 ### 1. Add Marketplace

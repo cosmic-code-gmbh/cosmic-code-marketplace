@@ -72,6 +72,15 @@
       "author": {
         "name": "Marcus Thor"
       }
+    },
+    {
+      "name": "herdr",
+      "source": "./plugins/herdr",
+      "description": "Herdr desktop setup: Artefakte dropdown with all claude.ai artifacts (live hook, pins, search), tabs-run bar, layout, settings and keys.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Marcus Thor"
+      }
     }
   ],
   "description": "Claude-Code-Plugins und Mods der Cosmic Code GmbH"

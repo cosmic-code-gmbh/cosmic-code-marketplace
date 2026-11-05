@@ -1,0 +1,12 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Artifact",
+        "hooks": [
+          { "type": "command", "command": "bun \"${CLAUDE_PLUGIN_ROOT}/hooks/bridge.ts\"", "timeout": 5 }
+        ]
+      }
+    ]
+  }
+}
