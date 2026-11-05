@@ -25,7 +25,8 @@ plugin herdr                               mods/tabs-run      top bar: "Artefakt
 
 A space can show its own icon (a product's app icon) instead of the colored letter. Right-click
 the space → **Choose icon…** (an image or a `.app`), or drop an image or `.app` on its row.
-The Agents list then shows that icon next to the agent's icon instead of the space name.
+The Agents list then shows that icon next to the agent's icon instead of the space name;
+a space without one shows its colored letter there, as in the Spaces list.
 Icons are stored as 128 px PNGs in `~/.config/herdr-app/space-icons/`, the mapping in shared
 `space.icons`. The three mods are clones of Herdr's `spaces`, `agents` and `menu` (Herdr replaces
 shipped mods on start), and the layout points at them.

@@ -1,6 +1,7 @@
 // Agents in grouped or priority views; parents take their most urgent sub-agent's place.
 // A viewed done agent stays in Done until left. A space with its own icon
-// (shared "space.icons", set in spaces-icons) shows that icon instead of its name.
+// (shared "space.icons", set in spaces-icons) shows that icon instead of its name;
+// one without shows its colored letter, as in the Spaces list.
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
@@ -26,6 +27,9 @@ function toggleSidebar() {
   setShared("sidebar.collapsed", !narrow());
   run("layout.resize", { id: "sidebar", px: narrow() ? (shared("sidebar.width") ?? 268) : window()?.platform === "macos" ? 76 : 44 });
 }
+
+// The same avatar colors as spaces-icons: one strong color per hue.
+const MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
 
 const clean = (s) => (s ?? "").replace(/^[^\p{L}\p{N}]+/u, "").trim();
 
@@ -292,7 +296,14 @@ export default class Agents extends View {
     }
 
     const spaceIcons = shared("space.icons") ?? {};
-    const spacePic = (a, size) => spaceIcons[a.space] ? image(spaceIcons[a.space]).w(size).h(size).flex_none().rounded(4) : null;
+    const spaceColors = shared("space.colors") ?? {};
+    // The space's app icon, else its colored letter.
+    const spacePic = (a, size) => {
+      if (spaceIcons[a.space]) return image(spaceIcons[a.space]).w(size).h(size).flex_none().rounded(4);
+      const c = spaceColors[a.space] ?? "ansi6";
+      return h_flex().size(size).flex_none().rounded(4).bg(c.startsWith("#") ? c : (MARK[c] ?? t[c])).items_center().justify_center()
+        .text_size(size * 0.58).font_bold().text_color("#ffffff").child([...(a.space_name || "?")][0].toUpperCase());
+    };
 
     const row = (a, i, subs = []) => {
       const pic = icon(a.program, 16, t.foreground);
@@ -335,10 +346,9 @@ export default class Agents extends View {
       // Under a space header the space goes without saying; an automatic tab number says nothing.
       // Without a space header above (priority, pinned) the row names its space.
       const full = byPriority || isPinned;
-      // The space's icon says which space; its name is left only when nothing else would.
+      // Without a space header, the space's icon or letter says which space.
       const sp = full ? spacePic(a, 16) : null;
-      const name = sp && more ? more : full ? a.space_name || label(a) : more ?? (/^\d+$/.test(label(a)) ? a.program?.name || label(a) : label(a));
-      const shownMore = sp ? null : more;
+      const name = more ?? (/^\d+$/.test(label(a)) ? a.program?.name || label(a) : label(a));
       return h_flex()
         .id(`ag-${a.address}`)
         .px(8)
@@ -364,8 +374,7 @@ export default class Agents extends View {
             cx.notify();
           })).child(pic)))
         .child(h_flex().flex_1().min_w(0).gap(5).items_center()
-          .child(div().min_w(0).max_w(full && shownMore ? 120 : 200).truncate().text_color(idle ? t.muted : t.foreground).child(name))
-          .when(full && Boolean(shownMore), el => el.child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(`\u00b7 ${shownMore}`))))
+          .child(div().min_w(0).max_w(200).truncate().text_color(idle ? t.muted : t.foreground).child(name)))
         .when(Boolean(machine), el => el.child(div().text_size(10).text_color(t.dim).child(machine)))
         .when(subs.length > 0, el => el.child(fold(a, subs)))
         .when(this.hovered === a.address, el => el.child(pin))
