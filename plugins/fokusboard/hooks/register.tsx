@@ -1,4 +1,5 @@
-// Fokusboard: the current topic, the plan workflow, artifacts, open questions and todos in a side pane.
+// Fokusboard: the current topic, the plan workflow, artifacts, open questions and todos in a side pane
+// (the terminal pane, or in Herdr the herdr plugin's sidebar tab, fed by a snapshot file).
 // Board logic (todos, decisions, the Stop nudge) follows sirkitree/pinboard (MIT).
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
@@ -9,6 +10,8 @@ const PANE = 'fokusboard'
 const TITLE = 'Fokusboard'
 const TOOL = 'mcp__fokusboard__update'
 const POLL_MS = 5000
+// How often the Herdr bridge reads the sidebar's clicks and publishes the board
+const HERDR_MS = 1000
 // How long a review or verify file this session wrote counts as its own (no notice)
 const OWN_WRITE_MS = 60_000
 
@@ -531,10 +534,12 @@ const FOCUS_ICON =
   '<circle cx="12" cy="12" r="8.75" stroke="#D97757" stroke-width="2.5"/>' +
   '<circle cx="12" cy="12" r="3.75" fill="#D97757"/></svg>'
 
-const open = ($: EngineInterface) => $.ui.open({ id: PANE, title: TITLE })
+// In Herdr the board is the sidebar tab of the herdr plugin (mods/fokus); the terminal pane stays closed
+const open = async ($: EngineInterface) => (herdr ? showInHerdr($) : void (await $.ui.open({ id: PANE, title: TITLE })))
 
 // The footer switch: closes the board when it is open, else refreshes and opens it
 const toggle = async ($: EngineInterface) => {
+  if (herdr) return showInHerdr($)
   if ((await $.ui.panes()).some(p => p.id === PANE)) return void (await $.ui.close({ id: PANE }))
   await refresh($)
   await open($)
@@ -662,6 +667,167 @@ const noteMode = async ($: EngineInterface, value: string | undefined) => {
   if (value && value !== (await read($, mode))) await update($, mode, () => value)
 }
 
+// "Review #2 · Sol · gegen v3 · 1 kritisch", or null before the first review
+export function reviewLine(s: PlanStatus): string | null {
+  if (s.latestReview === null) return null
+  return [
+    `Review #${s.latestReview}`,
+    s.reviewBy,
+    s.reviewedVersion !== null && s.reviewedVersion !== undefined && `gegen v${s.reviewedVersion}`,
+    s.latestReview > (s.integratedReview ?? 0) ? findingsText(s.findings) || 'offen' : 'eingearbeitet',
+  ]
+    .filter(Boolean)
+    .join(' · ')
+}
+
+// ── Herdr: the board as a file the herdr plugin's sidebar (mods/fokus) shows live ──────
+//
+//   this mod ──every second, when changed──► ~/.local/state/fokusboard/<terminal>.json ──► Herdr
+//   this mod ◄──intents with `at`, newest last── ~/.local/state/fokusboard/<terminal>.inbox.jsonl ◄── Herdr
+//
+// Set in session.start when Claude runs in a Herdr terminal (HC_TERMINAL_ID); null elsewhere.
+let herdr: { terminal: string; dir: string; seen: number; last: string } | null = null
+
+// What a click in the Herdr sidebar asks for; the board does it here, so its logic lives in one place
+export type Intent =
+  | { do: 'put'; text: string }
+  | { do: 'answer'; id: string; option: string }
+  | { do: 'reply' | 'explain' | 'dismiss'; id: string }
+  | { do: 'ask'; ids?: string[] }
+  | { do: 'note.add'; text: string }
+  | { do: 'note.toggle' | 'note.remove'; id: string }
+  | { do: 'notes.clearDone' | 'todos.clearDone' | 'refresh' }
+  | { do: 'notice.act' | 'notice.dismiss'; path: string; kind: Notice['kind'] }
+
+// Everything the sidebar draws, with each plan's stage and next steps worked out already
+async function snapshot($: EngineInterface, ended = false) {
+  const board = await readBoard($)
+  const status = await read($, planStatus)
+  const codeEdit = await read($, lastCodeEditAt)
+  const plansOut = []
+  for (const s of status) {
+    const stage = stageOf(s, codeEdit)
+    const rel = await relative($, s.path)
+    const base = s.path.replace(/\.md$/, '')
+    plansOut.push({
+      path: s.path,
+      rel,
+      name: s.name,
+      version: s.planVersion,
+      stage,
+      steps: pipeline(stage.step),
+      next: nextSteps(s, stage, rel),
+      review: reviewLine(s),
+      verify: s.verifyResult ? { result: s.verifyResult, version: s.verifiedVersion } : null,
+      files: [
+        { label: s.planVersion ? `Plan v${s.planVersion}` : 'Plan', path: s.path, exists: s.exists },
+        { label: s.latestReview ? `Review #${s.latestReview}` : 'Review', path: base + '.review.md', exists: s.hasReview },
+        { label: 'Verify', path: base + '.verify.md', exists: s.hasVerify },
+      ],
+    })
+  }
+  return {
+    v: 1,
+    terminal: herdr?.terminal ?? null,
+    cwd: await $.session.cwd().catch(() => null),
+    ended,
+    mode: await read($, mode),
+    ...board,
+    plans: plansOut,
+    notices: await read($, notices),
+    notes: sortNotes(await read($, notes)),
+  }
+}
+
+// Writes the snapshot when it changed (the sidebar watches the folder, so a write is a redraw)
+async function publishToHerdr($: EngineInterface, ended = false) {
+  if (!herdr) return
+  const body = JSON.stringify(await snapshot($, ended))
+  if (body === herdr.last) return
+  herdr.last = body
+  // updatedAt rides outside the comparison, so an unchanged board is not rewritten every second
+  await $.fs.write(`${herdr.dir}/${herdr.terminal}.json`, body.replace(/^\{/, `{"updatedAt":${Date.now()},`))
+}
+
+// The intents the sidebar wrote since the last read, oldest first
+export function newIntents(text: string, seen: number): { at: number; intent: Intent }[] {
+  const out: { at: number; intent: Intent }[] = []
+  for (const line of text.split('\n')) {
+    try {
+      const x = JSON.parse(line) as { at?: number } & Intent
+      if (typeof x.at === 'number' && x.at > seen && typeof x.do === 'string') out.push({ at: x.at, intent: x })
+    } catch {}
+  }
+  return out.sort((a, b) => a.at - b.at)
+}
+
+async function handle($: EngineInterface, x: Intent) {
+  const find = async (id: string) => (await read($, decisions)).find(d => d.id === id)
+  switch (x.do) {
+    case 'put':
+      return put($, x.text)
+    case 'answer': {
+      const d = await find(x.id)
+      return d && put($, `Zu „${d.text}“: ${x.option}`)
+    }
+    case 'reply': {
+      const d = await find(x.id)
+      return d && replyTo($, d)
+    }
+    case 'explain': {
+      const d = await find(x.id)
+      return d && explain($, d)
+    }
+    case 'dismiss': {
+      const d = await find(x.id)
+      return d && dismiss($, d)
+    }
+    case 'ask': {
+      const all = await read($, decisions)
+      return askAbout($, x.ids?.length ? all.filter(d => x.ids!.includes(d.id)) : all)
+    }
+    case 'note.add':
+      return changeNotes($, list => addNote(list, x.text, Date.now()))
+    case 'note.toggle':
+      return changeNotes($, list => toggleNote(list, x.id))
+    case 'note.remove':
+      return changeNotes($, list => list.filter(n => n.id !== x.id))
+    case 'notes.clearDone':
+      return changeNotes($, list => list.filter(n => !n.isDone))
+    case 'todos.clearDone':
+      return update($, todos, list => list.filter(t => !t.isDone))
+    case 'refresh':
+      return refresh($)
+    case 'notice.act': {
+      const n = (await read($, notices)).find(y => y.path === x.path && y.kind === x.kind)
+      return n && act($, n)
+    }
+    case 'notice.dismiss':
+      return update($, notices, list => list.filter(y => !(y.path === x.path && y.kind === x.kind)))
+  }
+}
+
+// One beat of the bridge: carry out new clicks, then publish the board
+async function herdrTick($: EngineInterface) {
+  if (!herdr) return
+  const inbox = await readOr($, `${herdr.dir}/${herdr.terminal}.inbox.jsonl`)
+  for (const { at, intent } of newIntents(inbox.text, herdr.seen)) {
+    herdr.seen = at
+    try {
+      await handle($, intent)
+    } catch {}
+  }
+  await publishToHerdr($)
+}
+
+// Shows the Fokus tab of Herdr's right panel (layout ids from the herdr plugin's main-filetree layout)
+async function showInHerdr($: EngineInterface) {
+  try {
+    await $.process.run(['herdr-app', 'do', 'layout.select', JSON.stringify({ stack: 'panel-body', child: 'fokus' })])
+    await $.process.run(['herdr-app', 'do', 'layout.show', JSON.stringify({ id: 'panel' })])
+  } catch {}
+}
+
 const WEIGHTS: { weight: Weight; label: string; bullet: string; color?: string }[] = [
   { weight: 'blocking', label: 'Blockiert die Arbeit', bullet: '●', color: 'error' },
   { weight: 'important', label: 'Wichtig', bullet: '◆', color: 'warning' },
@@ -683,6 +849,20 @@ export const register: Register = on => {
         if (saved?.notes?.length) await update($, notes, () => saved.notes ?? [])
       } catch {}
     }
+    // In a Herdr terminal the board also goes to the herdr plugin's sidebar
+    const terminal = await $.env.get('HC_TERMINAL_ID')
+    const home = await $.env.get('HOME')
+    // Clicks from before this start were meant for an earlier session
+    herdr = terminal && home ? { terminal, dir: `${home}/.local/state/fokusboard`, seen: Date.now(), last: '' } : null
+    if (herdr) void $.clock.every(HERDR_MS, () => herdrTick($))
+    return next(e)
+  })
+
+  // The sidebar greys the board out once the session is gone
+  on('session.end', async ($, e, next) => {
+    try {
+      await publishToHerdr($, true)
+    } catch {}
     return next(e)
   })
 
@@ -745,8 +925,8 @@ export const register: Register = on => {
     }
     await refresh($)
     const status = await read($, planStatus)
-    // Opens by itself the first time something lands on an empty board
-    if (isEmpty(before) && (!isEmpty(board) || status.length > 0)) await open($)
+    // Opens by itself the first time something lands on an empty board (in Herdr the Fokus button counts instead)
+    if (!herdr && isEmpty(before) && (!isEmpty(board) || status.length > 0)) await open($)
     const kept =
       change.thread && before.thread && !change.thread.why?.trim()
         ? 'Thread unchanged: it is the stable anchor; pass thread.why if the overall goal really changed.\n'
@@ -787,7 +967,7 @@ export const register: Register = on => {
     const tracked = e.tool === 'ExitPlanMode' ? await maybeTrack($, path, true) : await maybeTrack($, path)
     if (!path.endsWith('.md')) await update($, lastCodeEditAt, () => Date.now())
     if (tracked || isPlanPath(path) || (await read($, plans)).length > 0) await refresh($)
-    if (tracked && wasEmpty) await open($)
+    if (tracked && wasEmpty && !herdr) await open($)
     return ran
   })
 
@@ -960,17 +1140,7 @@ export const register: Register = on => {
       const steps = pipeline(stage.step)
       const at = steps.findIndex(x => x.state === 'current')
       const next = nextSteps(s, stage, rel(s.path))
-      const review =
-        s.latestReview === null
-          ? null
-          : [
-              `Review #${s.latestReview}`,
-              s.reviewBy,
-              s.reviewedVersion !== null && s.reviewedVersion !== undefined && `gegen v${s.reviewedVersion}`,
-              s.latestReview > (s.integratedReview ?? 0) ? findingsText(s.findings) || 'offen' : 'eingearbeitet',
-            ]
-              .filter(Boolean)
-              .join(' · ')
+      const review = reviewLine(s)
       return (
         <Box flexDirection="column" width={inner} marginBottom={1}>
           <Box flexDirection="row" width={inner}>

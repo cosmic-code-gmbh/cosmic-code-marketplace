@@ -140,6 +140,13 @@
                       "content": {
                         "mod": "changes"
                       }
+                    },
+                    {
+                      "id": "fokus",
+                      "type": "block",
+                      "content": {
+                        "mod": "fokus"
+                      }
                     }
                   ],
                   "active": "files"

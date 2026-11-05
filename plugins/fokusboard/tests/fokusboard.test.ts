@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect, mock, test } from 'claude-code/testing'
 
 import type { PlanStatus } from '../types'
 import {
@@ -12,6 +12,7 @@ import {
   fromDialog,
   isCovered,
   isPlanPath,
+  newIntents,
   nextSteps,
   noticesFor,
   parseHeaders,
@@ -729,5 +730,84 @@ describe('footer switch', () => {
     expect(isUp).toBe(true)
     await ui.press({ key: 'fokus-toggle' })
     expect(isUp).toBe(false)
+  })
+})
+
+describe('herdr sidebar', () => {
+  test('clicks are read once, oldest first, and junk lines are skipped', () => {
+    const text = ['{"at":5,"do":"refresh"}', 'kaputt', '{"at":3,"do":"note.add","text":"a"}', '{"at":1,"do":"refresh"}', '{"do":"refresh"}'].join('\n')
+    expect(newIntents(text, 2).map(x => x.at)).toEqual([3, 5])
+    expect(newIntents(text, 5)).toEqual([])
+  })
+
+  // A session in Herdr terminal t9: what it writes, what the sidebar left in its inbox
+  const herdrSession = async ($: any, on: any) => {
+    const written: Record<string, string> = {}
+    const tree: Record<string, string> = {}
+    const opened: string[] = []
+    const ran: string[][] = []
+    mock.env(on, { HC_TERMINAL_ID: 't9', HOME: '/h' })
+    const clock = mock.clock(on, { now: 0 })
+    on('fs.write', (_$: unknown, e: { path: string; text: string }) => {
+      written[e.path] = e.text
+      return { value: undefined }
+    })
+    files(on, tree)
+    on('ui.open', (_$: unknown, e: { id: string }) => {
+      opened.push(e.id)
+      return { value: { isPlaced: true } }
+    })
+    on('process.run', (_$: unknown, e: { argv: readonly string[] }) => {
+      ran.push([...e.argv])
+      return { value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    })
+    on('session.cwd', () => ({ value: '/r' }))
+    on('command.register', () => ({ value: undefined }))
+    on('tool.register', () => ({ value: undefined }))
+    on('session.start', (_$: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
+    mock.store(on)
+    const box = promptBox(on)
+    await $.session.start({ cwd: '/r', surface: 'terminal', isInteractive: true })
+    const board = () => JSON.parse(written['/h/.local/state/fokusboard/t9.json'] ?? 'null')
+    return { written, tree, opened, ran, clock, box, board }
+  }
+
+  test('the board goes to the terminal\'s snapshot file; the terminal pane stays closed', async ($, on) => {
+    const s = await herdrSession($, on)
+    await $.tool.call({ tool: TOOL, topic: { title: 'Sidebar', summary: 'Live.' }, open_decisions: [{ question: 'Tab?', options: ['Ja', 'Nein'] }] })
+    await s.clock.advance(1000)
+    expect(s.board()).toMatchObject({ terminal: 't9', ended: false, topic: { title: 'Sidebar' }, decisions: [{ id: 'd1', text: 'Tab?' }] })
+    expect(typeof s.board().updatedAt).toBe('number')
+    // The first content opens nothing in Herdr (the Fokus button counts the questions) …
+    expect(s.opened).toEqual([])
+    expect(s.ran.some(a => a.includes('layout.select'))).toBe(false)
+    // … and /fokus shows the Fokus tab of Herdr's panel, not the terminal pane
+    // The test's `$` types the engine-side input; the command needs only its name here
+    await ($.command.run as (input: { command: string; args: string }) => Promise<unknown>)({ command: 'fokus', args: '' })
+    expect(s.opened).toEqual([])
+    expect(s.ran.some(a => a.includes('layout.select'))).toBe(true)
+  })
+
+  test('a click on an option fills the prompt box; a note from the sidebar lands on the board', async ($, on) => {
+    const s = await herdrSession($, on)
+    await $.tool.call({ tool: TOOL, open_decisions: [{ question: 'Tab?', options: ['Ja', 'Nein'] }] })
+    const at = Date.now() + 10
+    s.tree['/h/.local/state/fokusboard/t9.inbox.jsonl'] =
+      JSON.stringify({ at, do: 'answer', id: 'd1', option: 'Ja' }) + '\n' + JSON.stringify({ at: at + 1, do: 'note.add', text: 'Kunde anrufen' })
+    await s.clock.advance(1000)
+    expect(s.box.filled).toEqual(['Zu „Tab?“: Ja'])
+    expect(s.box.sent).toEqual([])
+    expect(s.board().notes).toMatchObject([{ text: 'Kunde anrufen', isDone: false }])
+    // The same clicks are not carried out twice
+    await s.clock.advance(1000)
+    expect(s.box.filled).toEqual(['Zu „Tab?“: Ja'])
+  })
+
+  test('clicks left from before the session started are ignored', async ($, on) => {
+    const s = await herdrSession($, on)
+    await $.tool.call({ tool: TOOL, open_decisions: ['Tab?'] })
+    s.tree['/h/.local/state/fokusboard/t9.inbox.jsonl'] = JSON.stringify({ at: 1, do: 'answer', id: 'd1', option: 'Ja' })
+    await s.clock.advance(1000)
+    expect(s.box.filled).toEqual([])
   })
 })

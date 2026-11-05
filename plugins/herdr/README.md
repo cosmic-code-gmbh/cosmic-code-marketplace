@@ -5,9 +5,10 @@ Marcus' setup for the [Herdr desktop app](https://herdr.dev), in two halves:
 ```
 Claude Code                                Herdr app (~/.config/herdr-app)
 ───────────                                ───────────────────────────────
-plugin herdr                               mods/tabs-run      top bar, "Artefakte ▾" button
+plugin herdr                               mods/tabs-run      top bar: "Artefakte ▾", Fokus button
   hooks/bridge.ts ── every Artifact ──┐    mods/artifacts     the dropdown
-  (PostToolUse)      publish          │    layouts/main-filetree.json
+  (PostToolUse)      publish          │    mods/fokus         the Fokus sidebar (see below)
+                                      │    layouts/main-filetree.json
   skill artifacts-refresh ──┐         │    settings.json, keys.json
                             │         ▼
                             │   ~/.local/state/herdr-artifacts/
@@ -16,6 +17,29 @@ plugin herdr                               mods/tabs-run      top bar, "Artefakt
                                         │
                                         └──▶ read by mods/artifacts
 ```
+
+## The Fokus sidebar
+
+The **Fokus** button in the top bar opens the right panel's third tab, next to Files and Changes.
+It shows the [Fokusboard](../fokusboard) of the Claude Code session in the focused terminal, live:
+thread, current topic, open questions, todos, artifacts and the decision log. The plan workflow and
+your own notes stay in the terminal pane.
+The badge on the button counts the open questions. It turns red when one blocks the work.
+
+```
+fokusboard plugin (Claude Code)                       mods/fokus (Herdr)
+  every second, when the board changed ──► ~/.local/state/fokusboard/<terminal>.json ──► draws it
+  carries out the click (prompt box,  ◄── ~/.local/state/fokusboard/<terminal>.inbox.jsonl ◄── a click
+  ask, explain, note …)
+```
+
+- A click on an answer option puts "Zu „…“: option" in the prompt box. You send it yourself.
+- Under each question: Antworten (puts "Zu „…“: " in the prompt box), Erklären, Fragen (Claude
+  asks it in a dialog) and ✕ (dismiss). "Alle stellen" asks every open question at once.
+- In Herdr the Fokusboard opens no terminal pane. `/fokus` and `◎ Fokus` show this tab instead.
+- A terminal without a board keeps the last board shown. When its session ends, the board turns grey.
+
+Needs `fokusboard@cosmic-code-marketplace` 0.9.0 or later.
 
 ## The Artefakte dropdown
 
@@ -37,6 +61,7 @@ that only Claude can make (the `Artifact` tool lists them). Tell Claude
 ```sh
 claude plugin marketplace add cosmic-code-gmbh/cosmic-code-marketplace
 claude plugin install herdr@cosmic-code-marketplace
+claude plugin install fokusboard@cosmic-code-marketplace
 ```
 
 Then copy the Herdr half into the app, from a clone of this repo or from the installed plugin:

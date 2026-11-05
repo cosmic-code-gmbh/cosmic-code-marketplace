@@ -1,12 +1,15 @@
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { spaces, panes, focused, run, openOverlay, theme, window, shared, layout, settings } from "herdr";
+import { spaces, panes, focused, run, openOverlay, theme, window, shared, layout, settings, home, readTextFile, watchFolder } from "herdr";
 // Copy of mods/run-scripts/scripts.js (a mod can only import from its own folder).
 import { findProject, control } from "./scripts.js";
 
 // Clone of the shipped `tabs` mod with the run-scripts control ("▾ script ▶") at the right
-// end of the bar, after Files/Changes, and an "Artefakte" dropdown (mods/artifacts) before them.
+// end of the bar, after Files/Changes, an "Artefakte" dropdown (mods/artifacts) before them, and
+// a "Fokus" panel button (mods/fokus) that counts the focused Claude session's open questions.
 // Used by layouts/main-filetree.json.
+
+const FOKUS = `${home()}/.local/state/fokusboard`;
 
 // The focused terminal's folder (or the space's), and its machine, like run-scripts' bar.
 function where() {
@@ -31,7 +34,27 @@ export default class Tabs extends View {
     this.pressed = null;
     this.panels = JSON.parse(localStorage.getItem("panels") ?? "{}");
     this.project = null;
+    this.fokus = null; // { terminal, open, blocking } of the focused terminal's Fokusboard
     cx.timer.every(15000, (cx) => this.detect(cx, true));
+    cx.spawn(async (cx) => {
+      for (;;) {
+        await this.countQuestions(cx);
+        try { await watchFolder(FOKUS); } catch { await new Promise((r) => cx.timer.after(5000, r)); }
+      }
+    });
+  }
+
+  // Open questions on the focused terminal's Fokusboard, for the badge on the Fokus button
+  async countQuestions(cx) {
+    const terminal = focused()?.terminal ?? this.fokus?.terminal ?? null;
+    if (!terminal) return;
+    const text = await readTextFile(`${FOKUS}/${terminal}.json`).catch(() => null);
+    let board = null;
+    try { board = text && JSON.parse(text); } catch {}
+    if (!board && this.fokus) return; // not a Claude terminal: keep the last count
+    const list = board?.ended ? [] : board?.decisions ?? [];
+    this.fokus = { terminal, open: list.length, blocking: list.filter((d) => d.weight === "blocking").length };
+    cx.notify();
   }
 
   // Looks for package.json again when the focused folder changes, and every 15 s for edits.
@@ -107,9 +130,10 @@ export default class Tabs extends View {
       ? Math.max(10, (root.traffic_lights[0] + 64) / settings().zoom - (sidebar?.hidden ? 0 : sidebar?.size?.px ?? 0))
       : 10;
     const panel = find(root, "panel"), body = find(root, "panel-body");
-    const enabled = shared("workspace.panels") ?? ["files", "changes"];
+    const enabled = [...(shared("workspace.panels") ?? ["files", "changes"]), "fokus"];
+    if (focused()?.terminal && focused().terminal !== this.fokus?.terminal) cx.spawn(async (cx) => this.countQuestions(cx));
     this.syncPanel(space, panel, body, enabled);
-    const panelButton = (id, label, icon) => {
+    const panelButton = (id, label, icon, badge) => {
       const on = panel && !panel.hidden && body?.active === id;
       return h_flex().id(`panel-${id}`).h(26).px(8).gap(5).flex_none().items_center().rounded(6)
         .text_size(12).bg(on ? t.selected : t.chrome).text_color(on ? t.foreground : t.muted)
@@ -117,8 +141,11 @@ export default class Tabs extends View {
         .on_click(() => {
           if (on) run("layout.hide", { id: "panel" });
           else { run("layout.select", { stack: "panel-body", child: id }); run("layout.show", { id: "panel" }); }
-        }).child(svg(icon).size(14)).child(label);
+        }).child(svg(icon).size(14)).child(label)
+        .when(Boolean(badge), el => el.child(div().h(16).min_w(16).px(4).flex().items_center().justify_center().rounded(8)
+          .bg(badge.color).text_color(t.solid_foreground ?? t.background).text_size(10.5).font_semibold().child(String(badge.count))));
     };
+    const fokusBadge = this.fokus?.open ? { count: this.fokus.open, color: this.fokus.blocking ? t.blocked : "#D97757" } : null;
     return h_flex().size_full().min_w(0).px(10).pl(lightsPadding).gap(3).items_center().bg(t.chrome).border_b(1).border_color(t.border)
       .on_mouse_up("left", () => { this.pressed = null; })
       .on_scroll_wheel(e => { if (Math.abs(e.delta.y) >= 1) run(e.delta.y > 0 ? "tab.prev" : "tab.next"); })
@@ -130,6 +157,7 @@ export default class Tabs extends View {
         .child("Artefakte").child(svg("mods/files/chevron-down.svg").size(12)))
       .when(enabled.includes("files"), el => el.child(panelButton("files", "Files", "mods/files/file.svg")))
       .when(enabled.includes("changes"), el => el.child(panelButton("changes", "Changes", "mods/changes/changes.svg")))
+      .when(Boolean(find(root, "fokus")), el => el.child(panelButton("fokus", "Fokus", "mods/fokus/focus.svg", fokusBadge)))
       .when(Boolean(this.project), el => el.child(div().ml(5).flex_none().child(control(t, 6, this.project, { height: 26, stop }))))
       .when(w?.buttons, el => el.child(button("minimize", w.platform === "windows" ? svg("mods/tabs-run/win-min.svg").size(16) : "−", () => run("window.minimize")))
         .child(button("maximize", w.platform === "windows" ? svg(`mods/tabs-run/${w.maximized ? "win-restore" : "win-max"}.svg`).size(16) : "□", () => run("window.maximize")))

@@ -53,7 +53,7 @@
     {
       "name": "fokusboard",
       "source": "./plugins/fokusboard",
-      "description": "Side pane with the current topic, open decisions and todos (Claude Code mod)"
+      "description": "Side pane with the current topic, open decisions and todos (Claude Code mod); in Herdr it feeds the herdr plugin's Fokus sidebar"
     },
     {
       "name": "workflow",
@@ -76,8 +76,8 @@
     {
       "name": "herdr",
       "source": "./plugins/herdr",
-      "description": "Herdr desktop setup: Artefakte dropdown with all claude.ai artifacts (live hook, pins, search), tabs-run bar, layout, settings and keys.",
-      "version": "0.1.0",
+      "description": "Herdr desktop setup: Fokus sidebar tab (live Fokusboard), Artefakte dropdown with all claude.ai artifacts, tabs-run bar, layout, settings and keys.",
+      "version": "0.2.0",
       "author": {
         "name": "Marcus Thor"
       }
