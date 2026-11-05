@@ -41,7 +41,7 @@ fokusboard plugin (Claude Code)                       mods/fokus (Herdr)
   that started before fokusboard 0.9.0 writes none until it restarts. When a session ends, its board turns grey.
 
 **Tab names:** a tab running Claude Code takes its board's thread title ("Worum es geht"), cut to
-28 characters, and follows it when the thread changes. A tab you named yourself keeps its name;
+32 characters, and follows it when the thread changes. A tab you named yourself keeps its name;
 rename it to "" to hand it back.
 
 Needs `fokusboard@cosmic-code-marketplace` 0.9.0 or later.

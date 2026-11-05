@@ -12,7 +12,7 @@ import { findProject, control } from "./scripts.js";
 // Used by layouts/main-filetree.json.
 
 const FOKUS = `${home()}/.local/state/fokusboard`;
-const TAB_NAME_MAX = 28;
+const TAB_NAME_MAX = 32;
 
 // "herdr-Plugin für Claude-Artefakte" → at most TAB_NAME_MAX characters, cut at a word
 function shortName(text) {
