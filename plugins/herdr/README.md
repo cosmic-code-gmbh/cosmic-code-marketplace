@@ -8,6 +8,9 @@ Claude Code                                Herdr app (~/.config/herdr-app)
 plugin herdr                               mods/tabs-run      top bar: "Artefakte ▾", Fokus button
   hooks/bridge.ts ── every Artifact ──┐    mods/artifacts     the dropdown
   (PostToolUse)      publish          │    mods/fokus         the Fokus sidebar (see below)
+                                      │    mods/spaces-icons  Spaces sidebar with app icons per space
+                                      │    mods/agents-icons  Agents list showing those icons
+                                      │    mods/menu-icons    space menu: Choose / Remove icon
                                       │    layouts/main-filetree.json
   skill artifacts-refresh ──┐         │    settings.json, keys.json
                             │         ▼
@@ -17,6 +20,15 @@ plugin herdr                               mods/tabs-run      top bar: "Artefakt
                                         │
                                         └──▶ read by mods/artifacts
 ```
+
+## Space icons
+
+A space can show its own icon (a product's app icon) instead of the colored letter. Right-click
+the space → **Choose icon…** (an image or a `.app`), or drop an image or `.app` on its row.
+The Agents list then shows that icon next to the agent's icon instead of the space name.
+Icons are stored as 128 px PNGs in `~/.config/herdr-app/space-icons/`, the mapping in shared
+`space.icons`. The three mods are clones of Herdr's `spaces`, `agents` and `menu` (Herdr replaces
+shipped mods on start), and the layout points at them.
 
 ## The Fokus sidebar
 
