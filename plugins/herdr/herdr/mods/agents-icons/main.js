@@ -6,7 +6,7 @@
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, watchFolder, exec } from "herdr";
+import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, watchFolder, exec, knownAgents } from "herdr";
 import { codexRuns, claudeSubagents, subagentDir } from "./hidden.js";
 
 function find(node, id) {
@@ -102,9 +102,13 @@ function icon(p, size, color) {
   return p.tint ? svg(p.icon).size(size).flex_none().text_color(color) : image(p.icon).w(size).h(size).flex_none();
 }
 
+// The last agents each machine reported, shared with the shipped new-menu (same key).
+const KNOWN = "new-menu.agents";
+
 export default class Agents extends View {
   init(_props, cx) {
     if (props()?.sortMenu) return;
+    if (props()?.newMenu) return this.initNewMenu(cx);
     // Ids whose fold state differs from their default (see isFolded).
     this.folded = new Set();
     // Each agent's last state and when it changed (ms), kept across restarts.
@@ -249,6 +253,44 @@ export default class Agents extends View {
         .when(s.id === on, (el) => el.child(svg("mods/workspace-chrome/check.svg").size(14).flex_none().text_color(t.foreground)))));
   }
 
+  // The "+" popup of a space header: like new-menu (Terminal, then the installed agents),
+  // but it starts the tab in that space, not in the one open right now.
+  initNewMenu(cx) {
+    const machine = spaces().find((s) => s.id === props().space)?.machine;
+    const where = machine ?? "";
+    this.agentsKnown = shared(KNOWN)?.[where] ?? [];
+    cx.spawn(async (cx) => {
+      try {
+        this.agentsKnown = await knownAgents({ on: machine });
+        setShared(KNOWN, { ...shared(KNOWN), [where]: this.agentsKnown });
+      } catch { this.agentsFailed = true; }
+      cx.notify();
+    });
+  }
+
+  newMenu(t) {
+    const space = props().space;
+    const start = (args) => {
+      closeOverlay(props().overlay);
+      run("tab.new", { space, ...args });
+    };
+    const item = (id, pic, name, onClick) => h_flex()
+      .id(id).h(31).px(8).gap(9).rounded(7).items_center().flex_none()
+      .text_color(t.foreground).hover((el) => el.bg(t.hover))
+      .on_click(onClick)
+      .child(pic).child(div().flex_1().truncate().child(name));
+    const installed = this.agentsKnown.filter((a) => a.installed);
+    return v_flex().w_full().h(Math.min(420, 76 + Math.max(1, installed.length) * 31)).p(5).bg(t.popover).text_size(12.8)
+      .child(item("nm-terminal", svg("icons/shell.svg").size(14).flex_none(), "Terminal", () => start({})))
+      .child(div().px(8).pt(8).pb(4).text_size(11).text_color(t.dim).child(`Start an agent in ${props().spaceName ?? "this space"}`))
+      .child(v_flex().flex_1().min_h(0).overflow_y_scrollbar()
+        .children(installed.map((a) => item(`nm-${a.key}`,
+          a.tint ? svg(a.icon).size(14).flex_none().text_color(t.foreground) : image(a.icon).size(14).flex_none(),
+          a.name, () => start({ name: a.name, argv: a.run }))))
+        .when(installed.length === 0, (el) => el.child(div().px(8).py(6).text_color(t.dim)
+          .child(this.agentsFailed ? "Could not load agents" : "Checking installed agents…"))));
+  }
+
   peek(addr) {
     run("terminal.peek", { terminal: addr });
   }
@@ -312,6 +354,7 @@ export default class Agents extends View {
   render(cx) {
     const t = theme();
     if (props()?.sortMenu) return this.sortMenu(t);
+    if (props()?.newMenu) return this.newMenu(t);
     const collapsed = narrow();
     const sort = sortOf();
     let list = agents();
@@ -528,7 +571,7 @@ export default class Agents extends View {
         const sp = `sp-${a.space}`;
         const space = groups.findLast((g) => g.id === sp);
         if (space) space.members.push(a);
-        else groups.push({ id: sp, label: a.space_name || "", status: null, members: [a], pic: spacePic(a, 16), headerOnly: true });
+        else groups.push({ id: sp, label: a.space_name || "", status: null, members: [a], pic: spacePic(a, 16), headerOnly: true, space: a.space });
         const r = rankOf(a) || RANK.idle;
         const sec = marked.has(a.address) ? { id: `${sp}:followup`, label: "Follow up", status: null, color: t.ansi5 }
           : shelved.has(a.address) ? { id: `${sp}:archive`, label: "Archive", status: null }
@@ -542,7 +585,7 @@ export default class Agents extends View {
       const r = rankOf(a) || RANK.idle;
       const id = byPriority ? `sec-${r}` : `sp-${a.space}`;
       if (groups.at(-1)?.id === id) groups.at(-1).members.push(a);
-      else groups.push({ id, label: byPriority ? SECTION[r] : a.space_name || "", status: byPriority ? SECTION_STATUS[r] : null, members: [a], pic: byPriority ? null : spacePic(a, 14) });
+      else groups.push({ id, label: byPriority ? SECTION[r] : a.space_name || "", status: byPriority ? SECTION_STATUS[r] : null, members: [a], pic: byPriority ? null : spacePic(a, 14), space: byPriority ? null : a.space });
     }
     if (!bySpaceStatus && archived.length) groups.push({ id: "archive", label: "Archive", status: null, members: archived });
 
@@ -593,8 +636,29 @@ export default class Agents extends View {
           this.toggleFold(g.id);
           cx.notify();
         })
+        // A space header shows a "+" on hover: a new terminal or agent in that space.
+        .when(Boolean(g.space), (el) => el.on_hover((on, cx) => {
+          if (on) this.hoveredHeader = g.id;
+          else if (this.hoveredHeader === g.id) this.hoveredHeader = null;
+          cx.notify();
+        }))
         .when(Boolean(g.pic), (el) => el.child(g.pic))
         .child(div().truncate().when(!title && !g.pic, (el) => el.font_family(LABEL_FONT).font_bold()).when(title, (el) => el.font_semibold()).text_color(title ? t.foreground : g.color ?? (g.status === "idle" ? t.muted : t[g.status]) ?? t.dim).child(g.pic ? g.label : g.label.toUpperCase()))
+        .when(Boolean(g.space) && this.hoveredHeader === g.id, (el) => el.child(div()
+          .id(`new-${g.id}`)
+          .flex_none()
+          .p(2)
+          .rounded(4)
+          .text_color(t.dim)
+          .cursor_pointer()
+          .hover((s) => s.bg(t.hover).text_color(t.foreground))
+          .tooltip(`New terminal or agent in ${g.label}`)
+          .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+          .on_click((_e, cx) => {
+            cx.stop_propagation();
+            openOverlay({ mod: "agents-icons", kind: "popup", width: 250, height: 420, props: { newMenu: true, space: g.space, spaceName: g.label } });
+          })
+          .child(svg("mods/workspace-chrome/plus.svg").size(13))))
         .when(!open && !title, (el) => el.child(div().text_color(t.dim).child(String(g.members.length))))
         .child(div().flex_1())
         .when(!open && title, (el) => el.when(Boolean(splitChip(g)), (el) => el.child(splitChip(g))))
