@@ -46,12 +46,13 @@ export default class Tabs extends View {
 
   // Open questions on the focused terminal's Fokusboard, for the badge on the Fokus button
   async countQuestions(cx) {
+    // Each terminal tab counts its own board; with no terminal focused the last count stays
     const terminal = focused()?.terminal ?? this.fokus?.terminal ?? null;
     if (!terminal) return;
     const text = await readTextFile(`${FOKUS}/${terminal}.json`).catch(() => null);
     let board = null;
     try { board = text && JSON.parse(text); } catch {}
-    if (!board && this.fokus) return; // not a Claude terminal: keep the last count
+    if (terminal !== (focused()?.terminal ?? terminal)) return; // the focus moved on while reading
     const list = board?.ended ? [] : board?.decisions ?? [];
     this.fokus = { terminal, open: list.length, blocking: list.filter((d) => d.weight === "blocking").length };
     cx.notify();

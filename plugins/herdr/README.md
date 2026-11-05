@@ -37,7 +37,8 @@ fokusboard plugin (Claude Code)                       mods/fokus (Herdr)
 - Under each question: Antworten (puts "Zu „…“: " in the prompt box), Erklären, Fragen (Claude
   asks it in a dialog) and ✕ (dismiss). "Alle stellen" asks every open question at once.
 - In Herdr the Fokusboard opens no terminal pane. `/fokus` and `◎ Fokus` show this tab instead.
-- A terminal without a board keeps the last board shown. When its session ends, the board turns grey.
+- Each terminal tab shows its own session's board, and the badge counts its questions. A session
+  that started before fokusboard 0.9.0 writes none until it restarts. When a session ends, its board turns grey.
 
 Needs `fokusboard@cosmic-code-marketplace` 0.9.0 or later.
 

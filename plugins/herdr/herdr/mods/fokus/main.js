@@ -6,9 +6,9 @@
 //
 // The Claude Code mod owns the board and carries out every click (fill the prompt box, ask,
 // explain …), so this view only draws and sends intents. It shows topic, questions, todos,
-// artifacts and decisions (the plan workflow and the notes stay in the terminal pane). A terminal
-// without a board keeps the last one shown. Artifacts merge the board's links with this session's publishes from the herdr
-// plugin's hook (~/.local/state/herdr-artifacts/artifacts.jsonl).
+// artifacts and decisions (the plan workflow and the notes stay in the terminal pane). Each
+// terminal tab shows its own session's board. Artifacts merge the board's links with this
+// session's publishes from the herdr plugin's hook (~/.local/state/herdr-artifacts/artifacts.jsonl).
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
@@ -89,29 +89,23 @@ export default class Fokus extends View {
     cx.timer.every(15000, (cx) => cx.notify());
   }
 
-  // Shows the focused terminal's board when it has one (also one that appeared since), else
-  // reloads the board already shown
+  // Follows the focused terminal: each tab shows its own session's board, or none. Only while no
+  // terminal has the focus (a click into this panel, a mod pane) does the last board stay.
   async follow(cx) {
     const t = focused()?.terminal ?? null;
     this.tried = t;
-    if (t && t !== this.terminal) {
-      const text = await readTextFile(`${DIR}/${t}.json`).catch(() => null);
-      const board = text && readJson(text);
-      if (board) {
-        this.terminal = t;
-        this.board = board;
-        this.published = await hookArtifacts(t);
-        return cx.notify();
-      }
-    }
+    if (t) this.terminal = t;
     await this.load(cx);
   }
 
   async load(cx) {
     if (!this.terminal) return;
-    const text = await readTextFile(`${DIR}/${this.terminal}.json`).catch(() => null);
-    this.board = (text && readJson(text)) ?? this.board;
-    this.published = await hookArtifacts(this.terminal);
+    const terminal = this.terminal;
+    const text = await readTextFile(`${DIR}/${terminal}.json`).catch(() => null);
+    const published = await hookArtifacts(terminal);
+    if (terminal !== this.terminal) return; // the focus moved on while reading
+    this.board = (text && readJson(text)) ?? null;
+    this.published = published;
     cx.notify();
   }
 
@@ -528,6 +522,12 @@ export default class Fokus extends View {
       );
 
     if (!b) {
+      const isClaude = agent?.app === "claude-code" || agent?.program?.key === "claude";
+      const [title, text] = !this.terminal
+        ? ["Noch kein Fokusboard", "Klick in einen Tab mit Claude Code."]
+        : isClaude
+          ? ["Noch kein Fokusboard", "Diese Session schreibt noch keins. Es erscheint, sobald Claude ein Thema setzt. Läuft sie schon länger, starte sie neu (fokusboard 0.9.0)."]
+          : ["Kein Claude Code in diesem Tab", "Das Fokusboard gehört zu einer Claude-Code-Session."];
       return v_flex()
         .size_full()
         .bg(t.canvas ?? t.background)
@@ -540,15 +540,8 @@ export default class Fokus extends View {
             .gap(10)
             .p(24)
             .child(svg(ICON("focus")).size(28).text_color(tint(CLAUDE, "88")))
-            .child(div().text_size(13).font_medium().child("Noch kein Fokusboard"))
-            .child(
-              div()
-                .text_size(12)
-                .line_height(1.4)
-                .text_color(t.dim)
-                .text_center()
-                .child("Klick in ein Terminal mit Claude Code. Das Board erscheint, sobald die Session eins hat."),
-            ),
+            .child(div().text_size(13).font_medium().child(title))
+            .child(div().text_size(12).line_height(1.45).text_color(t.dim).text_center().child(text)),
         );
     }
 
