@@ -24,7 +24,7 @@ The **Fokus** button in the top bar opens the right panel's third tab, next to F
 It shows the [Fokusboard](../fokusboard) of the Claude Code session in the focused terminal, live:
 thread, current topic, open questions, todos, artifacts and the decision log. The plan workflow and
 your own notes stay in the terminal pane.
-The badge on the button counts the open questions. It turns red when one blocks the work.
+The red badge on the button counts the focused session's open questions.
 
 ```
 fokusboard plugin (Claude Code)                       mods/fokus (Herdr)

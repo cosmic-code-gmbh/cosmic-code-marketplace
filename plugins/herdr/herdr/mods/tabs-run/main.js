@@ -195,7 +195,7 @@ export default class Tabs extends View {
         .when(Boolean(badge), el => el.child(div().h(16).min_w(16).px(4).flex().items_center().justify_center().rounded(8)
           .bg(badge.color).text_color(t.solid_foreground ?? t.background).text_size(10.5).font_semibold().child(String(badge.count))));
     };
-    const fokusBadge = this.fokus?.open ? { count: this.fokus.open, color: this.fokus.blocking ? t.blocked : "#D97757" } : null;
+    const fokusBadge = this.fokus?.open ? { count: this.fokus.open, color: t.blocked } : null;
     return h_flex().size_full().min_w(0).px(10).pl(lightsPadding).gap(3).items_center().bg(t.chrome).border_b(1).border_color(t.border)
       .on_mouse_up("left", () => { this.pressed = null; })
       .on_scroll_wheel(e => { if (Math.abs(e.delta.y) >= 1) run(e.delta.y > 0 ? "tab.prev" : "tab.next"); })
