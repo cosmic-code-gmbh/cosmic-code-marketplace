@@ -9,7 +9,7 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { spaces, machines, panes, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout, nextCommand, appHome, notify } from "herdr";
+import { spaces, machines, panes, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout, nextCommand, appHome, notify, readTextFile } from "herdr";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -83,11 +83,26 @@ function clearIcon(id) {
   setShared("space.icons", icons);
 }
 
-// The macOS file picker; null when cancelled.
-async function pickIcon(name) {
+// The macOS file picker; resolves with the file, or null when cancelled.
+// exec stops a program after 30 s, which closed the picker mid-choice: osascript
+// runs detached instead and leaves its answer in a file, which is waited for
+// in rounds that each fit in exec's limit.
+async function pickIcon(id, name) {
   const prompt = `Icon for ${name}`.replace(/["\\]/g, "");
-  const r = await exec("osascript", ["-e", `POSIX path of (choose file with prompt "${prompt}" of type {"public.image", "com.apple.application-bundle"})`]);
-  return r.code === 0 ? r.stdout.trim() : null;
+  const script = `POSIX path of (choose file with prompt "${prompt}" of type {"public.image", "com.apple.application-bundle"})`;
+  const answer = `${appHome()}/${ICON_DIR}/.pick-${id}-${Date.now()}`;
+  await exec("mkdir", ["-p", `${appHome()}/${ICON_DIR}`]);
+  // The answer: osascript's exit code, its output, then its errors, one per line.
+  await exec("sh", ["-c", '( r=$(osascript -e "$1" 2>"$2.err"); c=$?; printf "%s\\n%s\\n%s" "$c" "$r" "$(cat "$2.err")" > "$2.tmp"; rm -f "$2.err"; mv "$2.tmp" "$2" ) </dev/null >/dev/null 2>&1 &', "sh", script, answer]);
+  for (;;) {
+    const r = await exec("sh", ["-c", 'for i in $(seq 1 50); do [ -e "$1" ] && exit 0; sleep 0.5; done; exit 1', "sh", answer]);
+    if (r.code === 0) break;
+  }
+  const [code, file, ...err] = ((await readTextFile(answer)) ?? "").split("\n");
+  await exec("rm", ["-f", answer]);
+  // -128: the person cancelled.
+  if (code !== "0" && !/-128/.test(err.join(" "))) throw new Error(err.join(" ").trim() || `The file picker failed (${code}).`);
+  return code === "0" ? file.trim() || null : null;
 }
 
 export default class Spaces extends View {
@@ -115,16 +130,23 @@ export default class Spaces extends View {
     // `git status` walks the whole tree, on another machine a process there:
     // only when its answer could have changed (see `due`).
     cx.timer.every(250, (cx) => this.checkNew(cx));
+    // The menu's commands. A pick waits in its own task, so the loop keeps
+    // taking commands, and nothing that fails ends the loop.
     cx.spawn(async (cx) => {
       for (;;) {
         const c = await nextCommand();
         const [, verb, id] = /^(icon|unicon):(.+)$/.exec(c) ?? [];
-        if (verb === "unicon") clearIcon(id);
-        else if (verb === "icon") {
-          const s = spaces().find((x) => x.id === id);
-          const file = s && await pickIcon(s.name);
-          if (file) await this.applyIcon(id, file);
-        }
+        try {
+          if (verb === "unicon") clearIcon(id);
+          const s = verb === "icon" && spaces().find((x) => x.id === id);
+          if (s) cx.spawn(async (cx) => {
+            try {
+              const file = await pickIcon(id, s.name);
+              if (file) await this.applyIcon(id, file);
+            } catch (e) { notify({ title: "Space icon", body: String(e?.message ?? e), level: "error" }); }
+            cx.notify();
+          });
+        } catch (e) { notify({ title: "Space icon", body: String(e?.message ?? e), level: "error" }); }
         cx.notify();
       }
     });
