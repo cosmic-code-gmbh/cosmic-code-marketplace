@@ -7,9 +7,20 @@ import { findProject, control } from "./scripts.js";
 // Clone of the shipped `tabs` mod with the run-scripts control ("▾ script ▶") at the right
 // end of the bar, after Files/Changes, an "Artefakte" dropdown (mods/artifacts) before them, and
 // a "Fokus" panel button (mods/fokus) that counts the focused Claude session's open questions.
+// Tabs nobody named take the name of their Claude session's Fokusboard thread, kept up to date;
+// a name someone typed is left alone.
 // Used by layouts/main-filetree.json.
 
 const FOKUS = `${home()}/.local/state/fokusboard`;
+const TAB_NAME_MAX = 28;
+
+// "herdr-Plugin für Claude-Artefakte" → at most TAB_NAME_MAX characters, cut at a word
+function shortName(text) {
+  const clean = (text ?? "").replace(/\s+/g, " ").trim();
+  if (clean.length <= TAB_NAME_MAX) return clean;
+  const cut = clean.slice(0, TAB_NAME_MAX - 1);
+  return (cut.includes(" ") ? cut.slice(0, cut.lastIndexOf(" ")) : cut) + "…";
+}
 
 // The focused terminal's folder (or the space's), and its machine, like run-scripts' bar.
 function where() {
@@ -35,13 +46,40 @@ export default class Tabs extends View {
     this.panels = JSON.parse(localStorage.getItem("panels") ?? "{}");
     this.project = null;
     this.fokus = null; // { terminal, open, blocking } of the focused terminal's Fokusboard
+    this.autoNames = JSON.parse(localStorage.getItem("autoNames") ?? "{}"); // tab id → the name this mod gave it
     cx.timer.every(15000, (cx) => this.detect(cx, true));
     cx.spawn(async (cx) => {
       for (;;) {
         await this.countQuestions(cx);
+        await this.nameTabs();
         try { await watchFolder(FOKUS); } catch { await new Promise((r) => cx.timer.after(5000, r)); }
       }
     });
+  }
+
+  // Names each tab after its Claude session's Fokusboard thread, unless someone named the tab
+  async nameTabs() {
+    const all = spaces().flatMap((sp) => sp.tabs ?? []);
+    let changed = false;
+    for (const tab of all) {
+      const agent = panes().find((p) => p.tab === tab.id && p.terminal && p.program?.agent);
+      if (!agent) continue;
+      // Unnamed, named by this mod, or named after its program ("Claude Code", as the new-tab menu does)
+      const isDefault = !tab.named || tab.name === this.autoNames[tab.id] || tab.name === agent.program.name;
+      if (!isDefault) continue; // typed by a person
+      const terminal = agent.terminal;
+      const text = await readTextFile(`${FOKUS}/${terminal}.json`).catch(() => null);
+      let board = null;
+      try { board = text && JSON.parse(text); } catch {}
+      const name = shortName(board?.thread?.title ?? board?.topic?.title);
+      if (!name || name === tab.name) continue;
+      run("tab.rename", { id: tab.id, name });
+      this.autoNames[tab.id] = name;
+      changed = true;
+    }
+    // Forget tabs that are gone
+    for (const id of Object.keys(this.autoNames)) if (!all.some((tab) => tab.id === id)) { delete this.autoNames[id]; changed = true; }
+    if (changed) localStorage.setItem("autoNames", JSON.stringify(this.autoNames));
   }
 
   // Open questions on the focused terminal's Fokusboard, for the badge on the Fokus button
