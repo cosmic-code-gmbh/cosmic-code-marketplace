@@ -9,7 +9,7 @@ plugin herdr                               mods/tabs-run      top bar: "Artefakt
   hooks/bridge.ts ── every Artifact ──┐    mods/artifacts     the dropdown
   (PostToolUse)      publish          │    mods/fokus         the Fokus sidebar (see below)
                                       │    mods/spaces-icons  Spaces sidebar with app icons per space
-                                      │    mods/agents-icons  Agents list showing those icons
+                                      │    mods/agents-icons  Agents list: space icons, hidden helpers
                                       │    mods/menu-icons    space menu: Choose / Remove icon
                                       │    layouts/main-filetree.json
   skill artifacts-refresh ──┐         │    settings.json, keys.json
@@ -30,6 +30,23 @@ a space without one shows its colored letter there, as in the Spaces list.
 Icons are stored as 128 px PNGs in `~/.config/herdr-app/space-icons/`, the mapping in shared
 `space.icons`. The three mods are clones of Herdr's `spaces`, `agents` and `menu` (Herdr replaces
 shipped mods on start), and the layout points at them.
+
+## Helpers under each agent
+
+The Agents list shows what a Claude agent runs that Herdr doesn't see as a terminal, as
+sub-rows with a spinner and the running time:
+
+```
+Claude terminal (HC_TERMINAL_ID=t20)
+ ├─ Bash → scripts/sol → codex exec   mods/agents-icons/hidden.js: pgrep + ps -E every 3 s,
+ │                                    tied to the agent by the process's HC_TERMINAL_ID
+ └─ Agent tool → subagent             hooks/subagents.ts: one file per running subagent in
+                                      ~/.local/state/herdr-subagents/ (watched by the mod)
+```
+
+Codex runs started by `scripts/sol` read "Sol". Subagents (Agent tool, `/simplify`, workflows)
+carry the Agent call's description when there is one, else their type. Restart Claude Code
+sessions after installing so the hooks load.
 
 ## The Fokus sidebar
 

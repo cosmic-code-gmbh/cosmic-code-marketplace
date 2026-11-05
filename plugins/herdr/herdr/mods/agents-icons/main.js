@@ -1,11 +1,13 @@
 // Agents in grouped or priority views; parents take their most urgent sub-agent's place.
 // A viewed done agent stays in Done until left. A space with its own icon
 // (shared "space.icons", set in spaces-icons) shows that icon instead of its name;
-// one without shows its colored letter, as in the Spaces list.
+// one without shows its colored letter, as in the Spaces list. Under an agent also
+// run what Herdr doesn't know as terminals: its Codex runs and Claude subagents (hidden.js).
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout } from "herdr";
+import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, watchFolder, exec } from "herdr";
+import { codexRuns, claudeSubagents, subagentDir } from "./hidden.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -89,6 +91,38 @@ export default class Agents extends View {
     if (!this.pendingPins.length) localStorage.removeItem("pins");
     this.migratingPins = new Set();
     cx.timer.every(30000, (cx) => cx.notify());
+    // terminal -> its hidden helpers, shown as sub-rows (see tree()).
+    this.hidden = {};
+    this.codex = [];
+    this.subs = [];
+    cx.timer.every(3000, (cx) => this.scanCodex(cx));
+    this.scanCodex(cx);
+    cx.spawn(async (cx) => {
+      // fs may write only under the app home; the hook's folder is made by mkdir.
+      await exec("mkdir", ["-p", subagentDir()]).catch(() => {});
+      for (;;) {
+        this.subs = await claudeSubagents(Date.now());
+        this.regroup();
+        cx.notify();
+        try { await watchFolder(subagentDir()); } catch { return; }
+      }
+    });
+  }
+
+  scanCodex(cx) {
+    cx.spawn(async (cx) => {
+      const runs = await codexRuns(Date.now()).catch(() => []);
+      const same = JSON.stringify(runs.map((r) => r.id)) === JSON.stringify(this.codex.map((r) => r.id));
+      this.codex = runs;
+      if (same) return;
+      this.regroup();
+      cx.notify();
+    });
+  }
+
+  regroup() {
+    this.hidden = {};
+    for (const h of [...this.subs, ...this.codex]) (this.hidden[h.terminal] ??= []).push(h);
   }
 
   // Stamps agents whose state changed. Done and idle count as one: looking at a
@@ -178,7 +212,12 @@ export default class Agents extends View {
 
   // Live sub-agents of `addr`, depth first, each with the tree lines in front of it.
   tree(all, addr, lead = []) {
-    const kids = all.filter((k) => k.parent === addr && k.state === "live");
+    // Hidden helpers look like sub-agents that are working; a click shows their agent.
+    const hidden = (this.hidden?.[addr] ?? []).map((h) => ({
+      address: `${addr}:${h.id}`, name: h.name, status: "working", since: h.since, owner: addr,
+      program: { icon: h.kind === "codex" ? "icons/codex.svg" : "icons/claude.svg" },
+    }));
+    const kids = [...all.filter((k) => k.parent === addr && k.state === "live"), ...hidden];
     return kids.flatMap((k, i) => {
       const last = i === kids.length - 1;
       return [
@@ -205,12 +244,13 @@ export default class Agents extends View {
       .text_size(12.5)
       .when(on, (el) => el.bg(t.raised))
       .hover((s) => s.bg(t.hover))
-      .on_click(() => this.peek(k.address))
+      .on_click(() => k.owner ? run("pane.focus", { pane: this.listedPane.get(k.owner) }) : this.peek(k.address))
       .children(s.lines.map(l => div().self_start().mt(-4).w(9).h(17).mr(4).flex_none()
         .when(Boolean(l), el => el.border_l(1.5).border_color(t.input))
         .when(l === "└" || l === "├", el => el.border_b(1.5).rounded_bl(6))))
       .when(Boolean(pic), el => el.child(div().mr(8).child(pic)))
       .child(div().flex_1().truncate().text_color(on ? t.foreground : t.muted).child(k.name || k.template || k.program?.name || k.address))
+      .when(Boolean(k.since), el => el.child(div().flex_none().mr(6).text_size(11).text_color(t.dim).child(duration(Date.now() - k.since))))
       .child(this.status(t, { status: st }, compact));
   }
 
@@ -232,6 +272,7 @@ export default class Agents extends View {
     const sort = sortOf();
     let list = agents();
     this.listed = new Map(list.map((a) => [a.address, a.status]));
+    this.listedPane = new Map(list.map((a) => [a.address, a.pane]));
     const all = terminals();
     this.migratePins(all);
     const shown = focused()?.agent;
