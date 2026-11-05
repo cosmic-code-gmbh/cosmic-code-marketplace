@@ -40,6 +40,9 @@ fokusboard plugin (Claude Code)                       mods/fokus (Herdr)
 - Each terminal tab shows its own session's board, and the badge counts its questions. A session
   that started before fokusboard 0.9.0 writes none until it restarts. When a session ends, its board turns grey.
 
+**Question badges:** every Claude tab shows a red badge with the number of open questions on its
+board, so you see at a glance where an answer is waiting.
+
 **Tab names:** a tab running Claude Code takes its board's thread title ("Worum es geht"), cut to
 32 characters, and follows it when the thread changes. A tab you named yourself keeps its name;
 rename it to "" to hand it back.

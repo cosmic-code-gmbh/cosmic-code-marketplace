@@ -8,7 +8,7 @@ import { findProject, control } from "./scripts.js";
 // end of the bar, after Files/Changes, an "Artefakte" dropdown (mods/artifacts) before them, and
 // a "Fokus" panel button (mods/fokus) that counts the focused Claude session's open questions.
 // Tabs nobody named take the name of their Claude session's Fokusboard thread, kept up to date;
-// a name someone typed is left alone.
+// a name someone typed is left alone. Each Claude tab shows its open questions as a red badge.
 // Used by layouts/main-filetree.json.
 
 const FOKUS = `${home()}/.local/state/fokusboard`;
@@ -47,39 +47,47 @@ export default class Tabs extends View {
     this.project = null;
     this.fokus = null; // { terminal, open, blocking } of the focused terminal's Fokusboard
     this.autoNames = JSON.parse(localStorage.getItem("autoNames") ?? "{}"); // tab id → the name this mod gave it
+    this.questions = {}; // tab id → open questions on its Claude session's Fokusboard
     cx.timer.every(15000, (cx) => this.detect(cx, true));
     cx.spawn(async (cx) => {
       for (;;) {
         await this.countQuestions(cx);
-        await this.nameTabs();
+        await this.readTabs(cx);
         try { await watchFolder(FOKUS); } catch { await new Promise((r) => cx.timer.after(5000, r)); }
       }
     });
   }
 
-  // Names each tab after its Claude session's Fokusboard thread, unless someone named the tab
-  async nameTabs() {
+  // Reads each Claude tab's Fokusboard: its open questions for the badge, and its thread as the
+  // tab's name unless someone named the tab
+  async readTabs(cx) {
     const all = spaces().flatMap((sp) => sp.tabs ?? []);
-    let changed = false;
+    const questions = {};
+    let named = false;
     for (const tab of all) {
       const agent = panes().find((p) => p.tab === tab.id && p.terminal && p.program?.agent);
       if (!agent) continue;
-      // Unnamed, named by this mod, or named after its program ("Claude Code", as the new-tab menu does)
-      const isDefault = !tab.named || tab.name === this.autoNames[tab.id] || tab.name === agent.program.name;
-      if (!isDefault) continue; // typed by a person
-      const terminal = agent.terminal;
-      const text = await readTextFile(`${FOKUS}/${terminal}.json`).catch(() => null);
+      const text = await readTextFile(`${FOKUS}/${agent.terminal}.json`).catch(() => null);
       let board = null;
       try { board = text && JSON.parse(text); } catch {}
-      const name = shortName(board?.thread?.title ?? board?.topic?.title);
-      if (!name || name === tab.name) continue;
+      if (!board) continue;
+      const open = board.ended ? 0 : (board.decisions ?? []).length;
+      if (open) questions[tab.id] = open;
+      // Unnamed, named by this mod, or named after its program ("Claude Code", as the new-tab menu does)
+      const isDefault = !tab.named || tab.name === this.autoNames[tab.id] || tab.name === agent.program.name;
+      const name = shortName(board.thread?.title ?? board.topic?.title);
+      if (!isDefault || !name || name === tab.name) continue;
       run("tab.rename", { id: tab.id, name });
       this.autoNames[tab.id] = name;
-      changed = true;
+      named = true;
     }
     // Forget tabs that are gone
-    for (const id of Object.keys(this.autoNames)) if (!all.some((tab) => tab.id === id)) { delete this.autoNames[id]; changed = true; }
-    if (changed) localStorage.setItem("autoNames", JSON.stringify(this.autoNames));
+    for (const id of Object.keys(this.autoNames)) if (!all.some((tab) => tab.id === id)) { delete this.autoNames[id]; named = true; }
+    if (named) localStorage.setItem("autoNames", JSON.stringify(this.autoNames));
+    if (JSON.stringify(questions) !== JSON.stringify(this.questions)) {
+      this.questions = questions;
+      cx.notify();
+    }
   }
 
   // Open questions on the focused terminal's Fokusboard, for the badge on the Fokus button
@@ -160,6 +168,8 @@ export default class Tabs extends View {
         .on_mouse_down("right", (_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "menu", kind: "popup", width: 200, props: { tab: "tab", target: { id: c.id, space: space.id } } }); })
         .when(Boolean(program?.icon), el => el.child(program.tint ? svg(program.icon).size(14).text_color(t.muted) : image(program.icon).size(14)))
         .child(div().max_w(170).truncate().child(c.zoomed ? `${name} Z` : name))
+        .when(Boolean(this.questions[c.id]), el => el.child(div().flex_none().h(16).min_w(16).px(4).flex().items_center().justify_center().rounded(8)
+          .bg(t.blocked).text_color(t.solid_foreground ?? t.background).text_size(10.5).font_semibold().child(String(this.questions[c.id]))))
         .when(c.status === "working", el => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)))
         .when(c.status === "blocked" || c.status === "done", el => el.child(div().size(6).rounded(3).bg(t[c.status])))
         .when(c.active, el => el.child(div().id(`close-${c.id}`).text_color(t.dim).on_mouse_down("left", stop).on_click((_e, cx) => { cx.stop_propagation(); run("tab.close", { id: c.id }); }).child(svg("mods/pane/close.svg").size(12))));
