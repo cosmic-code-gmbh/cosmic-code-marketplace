@@ -61,7 +61,21 @@ Archive     out of sight, folded; shows a spinner or !    shared agents.archive
 ```
 
 An agent sits on one shelf at most, and a shelf wins over a pin. Addresses whose terminal
-ended drop off. Section names are plain text in their state's color.
+ended drop off. Section names are small uppercase labels in their state's color.
+
+**Sort "Space, then status"** (third entry in the sort menu, next to Priority and Grouped by
+space): each space with its own sections, indented behind a grey line; Pinned stays on top.
+
+```
+ⓟ published                       folded:  ⓟ published  [3|1|3] ›
+│  FOLLOW UP                                one segment per section, its count in its color
+│  ▣ Google-Drive-Import …                  (Follow up, Needs you, Done, Working, Idle)
+│  WORKING · IDLE · …
+│  ARCHIVE 6 ›                     per space here, starts folded
+```
+
+Agent names and tab names are cut by their width, not a character count: a wider sidebar
+shows more.
 
 ## The Fokus sidebar
 
@@ -88,8 +102,8 @@ fokusboard plugin (Claude Code)                       mods/fokus (Herdr)
 **Question badges:** every Claude tab shows a red badge with the number of open questions on its
 board, so you see at a glance where an answer is waiting.
 
-**Tab names:** a tab running Claude Code takes its board's thread title ("Worum es geht"), cut to
-32 characters, and follows it when the thread changes. A tab you named yourself keeps its name;
+**Tab names:** a tab running Claude Code takes its board's thread title ("Worum es geht"), whole
+(the tab bar cuts it by width), and follows it when the thread changes. A tab you named yourself keeps its name;
 rename it to "" to hand it back.
 
 Needs `fokusboard@cosmic-code-marketplace` 0.9.0 or later.

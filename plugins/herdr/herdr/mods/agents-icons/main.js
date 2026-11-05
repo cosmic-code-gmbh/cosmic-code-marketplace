@@ -62,6 +62,8 @@ const kidStatus = (k, listed) => {
 const SORTS = [
   { id: "priority", label: "Priority", icon: "clock" },
   { id: "grouped", label: "Grouped by space", icon: "layers" },
+  // Spaces, and in each its own Needs you / Done / Working / Idle sections.
+  { id: "space-status", label: "Space, then status", icon: "folder" },
 ];
 const sortOf = () => SORTS.find((s) => s.id === shared("agents.sort")) ?? SORTS[0];
 const SECTION = { 4: "Needs you", 3: "Done", 2: "Working", 1: "Idle" };
@@ -101,7 +103,8 @@ function icon(p, size, color) {
 export default class Agents extends View {
   init(_props, cx) {
     if (props()?.sortMenu) return;
-    this.folded = new Set(["archive"]);
+    // Ids whose fold state differs from their default (see isFolded).
+    this.folded = new Set();
     // Each agent's last state and when it changed (ms), kept across restarts.
     this.changed = JSON.parse(localStorage.getItem("changed") ?? "{}");
     this.pendingPins = JSON.parse(localStorage.getItem("pins") ?? "[]");
@@ -189,6 +192,15 @@ export default class Agents extends View {
       const kept = [...marked].filter((a) => known.has(a));
       if (kept.length !== marked.size) setShared(k, kept);
     }
+  }
+
+  // Archives start folded, everything else open; a click flips it.
+  isFolded(id) {
+    return this.folded.has(id) !== (id === "archive" || id.endsWith(":archive"));
+  }
+
+  toggleFold(id) {
+    this.folded.has(id) ? this.folded.delete(id) : this.folded.add(id);
   }
 
   since(a) {
@@ -309,26 +321,40 @@ export default class Agents extends View {
     this.track(list, now);
     this.hold(list);
     const byPriority = sort.id === "priority";
+    const bySpaceStatus = sort.id === "space-status";
+    // State sections name the state, so rows can say it more quietly.
+    const sectioned = byPriority || bySpaceStatus;
     const urgency = new Map(list.map((a) => [a.address, Math.max(this.rank(a), ...this.tree(all, a.address).map((s) => RANK[kidStatus(s.t, this.listed)] ?? 0))]));
     const rankOf = (a) => urgency.get(a.address);
-    if (byPriority) list = [...list].sort((x, y) => rankOf(y) - rankOf(x) || this.since(y) - this.since(x) || y.seq - x.seq);
+    const urgentFirst = (x, y) => rankOf(y) - rankOf(x) || this.since(y) - this.since(x) || y.seq - x.seq;
     this.pruneShelves(all);
     const marked = shelf("agents.followUp");
     const shelved = shelf("agents.archive");
     // A shelf wins over a pin: you put the agent there on purpose.
     const onShelf = (a) => marked.has(a.address) || shelved.has(a.address);
+    // Follow up, then the rest, then Archive.
+    const shelfAt = (a) => (marked.has(a.address) ? 0 : shelved.has(a.address) ? 2 : 1);
+    if (byPriority) list = [...list].sort(urgentFirst);
+    if (bySpaceStatus) {
+      // Spaces keep their order (as in agents()); inside one: Follow up, most urgent first, Archive.
+      const spaceAt = new Map();
+      for (const a of list) if (!spaceAt.has(a.space)) spaceAt.set(a.space, spaceAt.size);
+      list = [...list].sort((x, y) => spaceAt.get(x.space) - spaceAt.get(y.space) || shelfAt(x) - shelfAt(y) || urgentFirst(x, y));
+    }
     const later = list.filter((a) => marked.has(a.address));
     const archived = list.filter((a) => shelved.has(a.address));
     const pinned = list.filter((a) => a.pinned && !onShelf(a));
     const rest = list.filter((a) => !a.pinned && !onShelf(a));
-    list = [...pinned, ...later, ...rest, ...archived];
+    // By space and status, the shelves sit inside each space; elsewhere they're global.
+    const spaced = list.filter((a) => onShelf(a) || !a.pinned);
+    list = bySpaceStatus ? [...pinned, ...spaced] : [...pinned, ...later, ...rest, ...archived];
     setAgentOrder(list.map((a) => a.address));
 
     const withKids = (a, i) => {
       const subs = collapsed ? [] : this.tree(all, a.address);
       const r = row(a, i, subs);
       if (this.folded.has(a.address)) return [r];
-      return [r, ...subs.map((s) => this.subRow(t, s, shown, byPriority))];
+      return [r, ...subs.map((s) => this.subRow(t, s, shown, sectioned))];
     };
 
     // The fold chevron; folded, the count too, colored by the most urgent one.
@@ -446,7 +472,7 @@ export default class Agents extends View {
         ["mods/workspace-chrome/archive.svg", "mods/agents-icons/archive-restore.svg"], ["Archive", "Take out of Archive"]);
       // Under a space header the space goes without saying; an automatic tab number says nothing.
       // Without a space header above (priority, pinned, follow up) the row names its space.
-      const full = byPriority || isPinned || isLater || isArchived;
+      const full = byPriority || isPinned || (!bySpaceStatus && (isLater || isArchived));
       // Without a space header, the space's icon or letter says which space.
       const sp = full ? spacePic(a, 16) : null;
       const name = more ?? (/^\d+$/.test(label(a)) ? a.program?.name || label(a) : label(a));
@@ -475,60 +501,129 @@ export default class Agents extends View {
             cx.notify();
           })).child(pic)))
         .child(h_flex().flex_1().min_w(0).gap(5).items_center()
-          .child(div().min_w(0).max_w(200).truncate().text_color(idle ? t.muted : t.foreground).child(name)))
+          .child(div().min_w(0).truncate().text_color(idle ? t.muted : t.foreground).child(name)))
         .when(Boolean(machine), el => el.child(div().text_size(10).text_color(t.dim).child(machine)))
         .when(subs.length > 0, el => el.child(fold(a, subs)))
         .when(this.hovered === a.address, el => el.child(h_flex().flex_none().gap(2).when(!isArchived, (el) => el.child(laterBtn)).child(archiveBtn).when(!isArchived, (el) => el.child(pin))))
         .when(this.hovered !== a.address && Boolean(when), el => el.child(div().flex_none().text_size(11).text_color(t.dim).child(duration(now - when))))
-        .child(this.status(t, a, byPriority && !isPinned && !isLater && !isArchived));
+        .child(this.status(t, a, sectioned && !isPinned && !isLater && !isArchived));
     };
 
     // Groups in list order: spaces (grouped) or priority sections. Agents of a
     // space are next to each other in agents(), so neighbours make a group.
     const groups = [];
     if (pinned.length) groups.push({ id: "pinned", label: "Pinned", status: null, members: pinned });
-    if (later.length) groups.push({ id: "follow-up", label: "Follow up", status: null, color: t.ansi5, members: later });
-    for (const a of rest) {
+    if (bySpaceStatus) {
+      for (const a of spaced) {
+        // A space header that only folds, then the space's sections under it.
+        const sp = `sp-${a.space}`;
+        const space = groups.findLast((g) => g.id === sp);
+        if (space) space.members.push(a);
+        else groups.push({ id: sp, label: a.space_name || "", status: null, members: [a], pic: spacePic(a, 16), headerOnly: true });
+        const r = rankOf(a) || RANK.idle;
+        const sec = marked.has(a.address) ? { id: `${sp}:followup`, label: "Follow up", status: null, color: t.ansi5 }
+          : shelved.has(a.address) ? { id: `${sp}:archive`, label: "Archive", status: null }
+          : { id: `${sp}-${r}`, label: SECTION[r], status: SECTION_STATUS[r] };
+        if (groups.at(-1)?.id === sec.id) groups.at(-1).members.push(a);
+        else groups.push({ ...sec, members: [a], parent: sp });
+      }
+    }
+    if (!bySpaceStatus && later.length) groups.push({ id: "follow-up", label: "Follow up", status: null, color: t.ansi5, members: later });
+    for (const a of bySpaceStatus ? [] : rest) {
       const r = rankOf(a) || RANK.idle;
       const id = byPriority ? `sec-${r}` : `sp-${a.space}`;
       if (groups.at(-1)?.id === id) groups.at(-1).members.push(a);
       else groups.push({ id, label: byPriority ? SECTION[r] : a.space_name || "", status: byPriority ? SECTION_STATUS[r] : null, members: [a], pic: byPriority ? null : spacePic(a, 14) });
     }
-    if (archived.length) groups.push({ id: "archive", label: "Archive", status: null, members: archived });
+    if (!bySpaceStatus && archived.length) groups.push({ id: "archive", label: "Archive", status: null, members: archived });
 
     // A group's header; it folds the group. Folded, it says how many and the most urgent state.
+    // A folded space's split chip: one segment per section that has agents, its count
+    // in the section's color (Follow up, Needs you, Done, Working, Idle; not Archive).
+    const splitChip = (g) => {
+      const counts = new Map();
+      for (const a of g.members) {
+        if (shelved.has(a.address)) continue;
+        const key = marked.has(a.address) ? "followup" : SECTION_STATUS[rankOf(a) || RANK.idle] ?? "idle";
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      }
+      const order = [["followup", t.ansi5, "Follow up"], ["blocked", t.blocked, "Needs you"], ["done", t.done, "Done"], ["working", t.working, "Working"], ["idle", t.idle ?? t.dim, "Idle"]];
+      const parts = order.filter(([k]) => counts.has(k));
+      if (!parts.length) return null;
+      return h_flex().id(`split-${g.id}`).flex_none().h(18).rounded(5).overflow_hidden().gap(1)
+        .tooltip(parts.map(([k, , label]) => `${counts.get(k)} ${label}`).join(" · "))
+        .children(parts.map(([k, color]) => h_flex().h_full().px(6).items_center()
+          // Grey reads faint at the others' strength, so Idle gets a stronger tint.
+          .bg(color + (k === "idle" ? "8c" : "2e")).text_size(10.5).font_semibold().text_color(k === "idle" ? t.foreground : color).child(String(counts.get(k)))));
+    };
+
+    // A group's header; it folds the group. Folded, it says how many and the most urgent state;
+    // a folded space by space and status shows its split chip instead.
+    // The space's own header reads as the title and its sections as small labels under it.
     const header = (g) => {
-      const open = !this.folded.has(g.id);
+      const open = !this.isFolded(g.id);
       const top = g.members.reduce((m, a) => ((RANK[a.status] ?? 0) > (RANK[m] ?? 0) ? a.status : m), null);
-      // Every group but the first gets extra room above, so sections read apart.
-      const gap = groups[0] === g ? 8 : 20;
+      const title = bySpaceStatus && g.headerOnly;
+      // Room above: a card title or a section in a card little, other groups more (not the first).
+      const gap = title ? 6 : g.parent ? 8 : groups[0] === g ? 8 : 20;
       return h_flex()
         .id(g.id)
         .px(8)
         .pt(gap)
-        .h(22 + gap)
+        .h((title ? 26 : 22) + gap)
         .flex_none()
-        .gap(6)
+        .gap(title ? 8 : 6)
         .items_center()
-        .text_size(11)
-        .font_medium()
+        // State and shelf names read as small uppercase labels; space names keep their case.
+        .text_size(title ? 12.5 : g.pic ? 11 : 10)
+        .when(title || !g.pic, (el) => el.font_semibold())
+        .when(!title && Boolean(g.pic), (el) => el.font_medium())
         .cursor_pointer()
         .hover((s) => s.text_color(t.foreground))
         .on_click((_e, cx) => {
-          open ? this.folded.add(g.id) : this.folded.delete(g.id);
+          this.toggleFold(g.id);
           cx.notify();
         })
         .when(Boolean(g.pic), (el) => el.child(g.pic))
-        .child(div().truncate().text_color(g.color ?? t[g.status] ?? t.dim).child(g.label))
-        .when(!open, (el) => el.child(div().text_color(t.dim).child(String(g.members.length))))
+        .child(div().truncate().text_color(title ? t.foreground : g.color ?? t[g.status] ?? t.dim).child(g.pic ? g.label : g.label.toUpperCase()))
+        .when(!open && !title, (el) => el.child(div().text_color(t.dim).child(String(g.members.length))))
         .child(div().flex_1())
+        .when(!open && title, (el) => el.when(Boolean(splitChip(g)), (el) => el.child(splitChip(g))))
         .when(!open, (el) => el
-          .when((!byPriority || g.id === "archive") && top && top !== "idle", (el) => el.child(this.status(t, { status: top }, true)))
+          .when(!title && (Boolean(g.pic) || g.id === "archive" || g.id.endsWith(":archive")) && top && top !== "idle", (el) => el.child(this.status(t, { status: top }, true)))
           .child(svg("mods/workspace-chrome/chevron-right.svg").size(11).flex_none().text_color(t.dim)));
+    };
+    const groupRows = (g) => {
+      if (g.parent && this.isFolded(g.parent)) return [];
+      if (g.headerOnly) return [header(g)];
+      return [header(g), ...(this.isFolded(g.id) ? [] : g.members.flatMap(withKids))];
+    };
+    // By space and status: the space's icon and name, then its sections indented
+    // to the right of a thin line that runs down from under the icon.
+    const cards = () => {
+      const out = [];
+      let card = null;
+      for (const g of groups) {
+        if (g.headerOnly) {
+          out.push((card = { card: true, id: g.id, head: groupRows(g), items: [] }));
+          continue;
+        }
+        const rowsOf = groupRows(g);
+        if (card && g.parent === card.id) card.items.push(...rowsOf);
+        else out.push(...rowsOf);
+      }
+      return out.map((c, i) => (c.card === true
+        ? v_flex().id(`space-${c.id}`).flex_none().mt(i ? 14 : 2)
+          .children(c.head)
+          .when(c.items.length > 0, (el) => el.child(
+            // The icon is 16 px wide at 8 px in: the line runs under its middle, and the
+            // indent puts section labels and agent icons flush with the space name (32 px).
+            v_flex().flex_none().ml(15).pl(7.5).border_l(1.5).border_color(t.input).children(c.items)))
+        : c));
     };
     const rows = collapsed
       ? list.flatMap(withKids)
-      : groups.flatMap((g) => [header(g), ...(this.folded.has(g.id) ? [] : g.members.flatMap(withKids))]);
+      : bySpaceStatus ? cards() : groups.flatMap(groupRows);
 
     return v_flex()
       .size_full()
@@ -554,7 +649,7 @@ export default class Agents extends View {
                 .text_size(11)
                 .text_color(t.dim)
                 .hover((s) => s.text_color(t.foreground))
-                .on_click(() => openOverlay({ mod: "agents-icons", kind: "popup", width: 200, height: 140, props: { sortMenu: true } }))
+                .on_click(() => openOverlay({ mod: "agents-icons", kind: "popup", width: 200, height: 175, props: { sortMenu: true } }))
                 .tooltip(`Sort agents: ${sort.label}`)
                 .child(svg(`mods/workspace-chrome/${sort.icon}.svg`).size(14)),
             ),

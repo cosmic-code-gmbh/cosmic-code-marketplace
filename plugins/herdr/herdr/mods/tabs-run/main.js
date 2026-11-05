@@ -12,9 +12,11 @@ import { findProject, control } from "./scripts.js";
 // Used by layouts/main-filetree.json.
 
 const FOKUS = `${home()}/.local/state/fokusboard`;
-const TAB_NAME_MAX = 32;
+// Only a guard against runaway titles: the tab bar and the Agents list cut names by
+// their width, so a wider sidebar shows more.
+const TAB_NAME_MAX = 120;
 
-// "herdr-Plugin für Claude-Artefakte" → at most TAB_NAME_MAX characters, cut at a word
+// "herdr-Plugin für Claude-Artefakte" → whitespace tidied; past TAB_NAME_MAX cut at a word
 function shortName(text) {
   const clean = (text ?? "").replace(/\s+/g, " ").trim();
   if (clean.length <= TAB_NAME_MAX) return clean;
