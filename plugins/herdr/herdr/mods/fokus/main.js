@@ -489,25 +489,26 @@ export default class Fokus extends View {
     const status = b?.ended ? null : agent?.status ?? null;
     const statusColor = { working: t.working, blocked: t.blocked, done: t.done, idle: t.idle }[status] ?? t.dim;
 
+    // As tall as the pane header beside it (layout pane.header height 30, below a 2 px gap)
     const head = h_flex()
       .flex_none()
-      .h(44)
+      .h(32)
       .px(14)
       .gap(8)
       .items_center()
       .border_b(1)
       .border_color(t.border)
-      .child(svg(ICON("focus")).size(16).text_color(CLAUDE))
-      .child(div().text_size(13.5).font_semibold().child("Fokus"))
+      .child(svg(ICON("focus")).size(14).text_color(CLAUDE))
+      .child(div().text_size(12.5).font_semibold().child("Fokus"))
       .child(div().flex_1())
       .when(Boolean(this.terminal), (el) =>
         el.child(
           h_flex()
             .gap(6)
             .px(8)
-            .h(22)
+            .h(20)
             .items_center()
-            .rounded(11)
+            .rounded(10)
             .bg(t.raised)
             .text_size(11.5)
             .text_color(t.muted)
