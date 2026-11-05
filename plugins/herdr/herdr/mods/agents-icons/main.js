@@ -67,13 +67,15 @@ const SORTS = [
 ];
 const sortOf = () => SORTS.find((s) => s.id === shared("agents.sort")) ?? SORTS[0];
 const SECTION = { 4: "Needs you", 3: "Done", 2: "Working", 1: "Idle" };
-const SECTION_STATUS = { 4: "blocked", 3: "done", 2: "working" };
+const SECTION_STATUS = { 4: "blocked", 3: "done", 2: "working", 1: "idle" };
 
 // Shelves you move agents onto by hand; nothing moves them on its own.
 // Follow up (top): work is left for you (testing, a manual step).
 // Archive (bottom, folded): out of sight until you take it back out.
 // Each is a shared list of terminal addresses; an agent sits on at most one,
 // and addresses whose terminal is gone are dropped (pruneShelves).
+// The default UI font has no heavier faces; the system font does, so the bold uppercase labels use it.
+const LABEL_FONT = ".SystemUIFont";
 const SHELVES = ["agents.followUp", "agents.archive"];
 const shelf = (key) => new Set(shared(key) ?? []);
 function setShelf(key, address, on) {
@@ -592,7 +594,7 @@ export default class Agents extends View {
           cx.notify();
         })
         .when(Boolean(g.pic), (el) => el.child(g.pic))
-        .child(div().truncate().text_color(title ? t.foreground : g.color ?? t[g.status] ?? t.dim).child(g.pic ? g.label : g.label.toUpperCase()))
+        .child(div().truncate().when(!title && !g.pic, (el) => el.font_family(LABEL_FONT).font_bold()).when(title, (el) => el.font_semibold()).text_color(title ? t.foreground : g.color ?? (g.status === "idle" ? t.muted : t[g.status]) ?? t.dim).child(g.pic ? g.label : g.label.toUpperCase()))
         .when(!open && !title, (el) => el.child(div().text_color(t.dim).child(String(g.members.length))))
         .child(div().flex_1())
         .when(!open && title, (el) => el.when(Boolean(splitChip(g)), (el) => el.child(splitChip(g))))
