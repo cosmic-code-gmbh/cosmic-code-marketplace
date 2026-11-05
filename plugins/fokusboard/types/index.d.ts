@@ -32,6 +32,18 @@ export type Notice = { path: string; name: string; kind: 'review' | 'gaps' | 've
 // What is kept per repository and branch across sessions: the person's own notes
 export type Saved = { notes?: Note[] }
 
+// A session's board as it last stood, so a resumed session (same id) gets it back
+export type SavedBoard = {
+  at: number
+  thread: Thread | null
+  topic: Topic | null
+  decisions: Decision[]
+  todos: Todo[]
+  artifacts: Artifact[]
+  log: LogEntry[]
+  plans: string[]
+}
+
 // A link that matters for the current work: a claude.ai artifact, a PR, a doc
 export type Artifact = { label: string; href: string }
 

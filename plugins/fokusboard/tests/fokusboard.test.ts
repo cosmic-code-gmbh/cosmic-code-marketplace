@@ -12,6 +12,7 @@ import {
   fromDialog,
   isCovered,
   isPlanPath,
+  keepBoard,
   newIntents,
   nextSteps,
   noticesFor,
@@ -809,5 +810,46 @@ describe('herdr sidebar', () => {
     s.tree['/h/.local/state/fokusboard/t9.inbox.jsonl'] = JSON.stringify({ at: 1, do: 'answer', id: 'd1', option: 'Ja' })
     await s.clock.advance(1000)
     expect(s.box.filled).toEqual([])
+  })
+})
+
+describe('resume', () => {
+  const saved = (at: number, title: string) => ({ at, thread: { title, goal: 'g' }, topic: null, decisions: [], todos: [], artifacts: [], log: [], plans: [] })
+
+  test('only the newest sessions are kept', () => {
+    let all = {}
+    for (let i = 0; i < 35; i++) all = keepBoard(all, `s${i}`, saved(i, `T${i}`))
+    expect(Object.keys(all)).toHaveLength(30)
+    expect(Object.keys(all)).toContain('s34')
+    expect(Object.keys(all)).not.toContain('s0')
+  })
+
+  // A session start with the given id over a store that already holds boards
+  const start = async ($: any, on: any, id: string) => {
+    mock.store(on, { boards: { old: saved(1, 'Payment v3') } })
+    mock.env(on, {})
+    on('session.id', () => ({ value: id }))
+    on('session.cwd', () => ({ value: '/r' }))
+    on('command.register', () => ({ value: undefined }))
+    on('tool.register', () => ({ value: undefined }))
+    on('clock.every', () => ({ value: undefined }))
+    on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+    on('session.start', (_$: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    on('classic.SessionStart', () => ({}))
+    // As the engine orders them: the classic SessionStart (the transcript's id, also for --resume) first
+    await $.classic.SessionStart({ source: id === 'old' ? 'resume' : 'startup', session_id: id })
+    await $.session.start({ cwd: '/r', surface: 'terminal', isInteractive: true })
+    // An empty update answers with the board as it stands
+    const ran = await $.tool.call({ tool: TOOL })
+    return JSON.stringify(ran)
+  }
+
+  test('a resumed session (same id) gets its board back', async ($, on) => {
+    expect(await start($, on, 'old')).toContain('Thread: Payment v3')
+  })
+
+  test('a new session starts with an empty board', async ($, on) => {
+    expect(await start($, on, 'new')).not.toContain('Payment v3')
   })
 })

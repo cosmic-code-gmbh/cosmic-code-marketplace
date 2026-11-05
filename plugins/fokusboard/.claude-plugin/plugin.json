@@ -1,7 +1,7 @@
 {
   "name": "fokusboard",
   "displayName": "Fokusboard",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Side pane with the current topic, open questions (weighted, with context and options), plan workflow status (Plan → Review → Einarbeiten → Umsetzen → Verify, by hand or as a sol loop), artifacts and todos (built on sirkitree/pinboard, MIT)",
   "author": {
     "name": "Marcus Thor"

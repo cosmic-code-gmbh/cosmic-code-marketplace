@@ -4,7 +4,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Artifact, Decision, LogEntry, Note, Notice, PlanStatus, Saved, Step, Thread, Todo, Topic, Weight } from '../types'
+import type { Artifact, Decision, LogEntry, Note, Notice, PlanStatus, Saved, SavedBoard, Step, Thread, Todo, Topic, Weight } from '../types'
 
 const PANE = 'fokusboard'
 const TITLE = 'Fokusboard'
@@ -12,6 +12,10 @@ const TOOL = 'mcp__fokusboard__update'
 const POLL_MS = 5000
 // How often the Herdr bridge reads the sidebar's clicks and publishes the board
 const HERDR_MS = 1000
+// How often the board is saved for a later --resume, and how many sessions are kept
+const SAVE_MS = 2000
+const SAVED_SESSIONS = 30
+const BOARDS_KEY = 'boards'
 // How long a review or verify file this session wrote counts as its own (no notice)
 const OWN_WRITE_MS = 60_000
 
@@ -667,6 +671,52 @@ const noteMode = async ($: EngineInterface, value: string | undefined) => {
   if (value && value !== (await read($, mode))) await update($, mode, () => value)
 }
 
+// ── Resume: the board is kept per session id, which --resume keeps ──────────────
+
+// The saved boards with this session's put in, newest first, at most SAVED_SESSIONS
+export function keepBoard(all: Record<string, SavedBoard>, id: string, board: SavedBoard): Record<string, SavedBoard> {
+  const entries = Object.entries({ ...all, [id]: board }).sort((a, b) => b[1].at - a[1].at)
+  return Object.fromEntries(entries.slice(0, SAVED_SESSIONS))
+}
+
+// The id the board is kept under, from the classic SessionStart event: at session.start a resumed
+// session's $.session.id() is not yet the transcript's. Nothing is saved before it is known, so an
+// empty board never overwrites the saved one. (Module state: a reload waits for the next start.)
+let boardId: string | null = null
+// Whether that start was a --resume (or fork), whose board session.start brings back
+let isResumed = false
+// The last board saved, to tell whether anything changed
+let lastSaved = ''
+
+// Saves the board under this session's id when it changed. An empty board is never saved: there
+// is nothing to bring back, and at the session's end its state is already gone (saving then would
+// overwrite the board a --resume should get back).
+async function saveBoard($: EngineInterface) {
+  if (!boardId) return
+  const board = await readBoard($)
+  if (isEmpty(board) && (await read($, plans)).length === 0) return
+  const body = JSON.stringify({ ...board, plans: await read($, plans) })
+  if (body === lastSaved) return
+  lastSaved = body
+  const all = ((await $.store.get(BOARDS_KEY)) ?? {}) as Record<string, SavedBoard>
+  await $.store.set(BOARDS_KEY, keepBoard(all, boardId, { at: Date.now(), ...board, plans: await read($, plans) }))
+}
+
+// A resumed session (same id) gets its board back; a new one starts empty
+async function restoreBoard($: EngineInterface, id: string) {
+  if (!isEmpty(await readBoard($))) return
+  const all = ((await $.store.get(BOARDS_KEY)) ?? {}) as Record<string, SavedBoard>
+  const saved = all[id]
+  if (!saved) return
+  await update($, thread, () => saved.thread)
+  await update($, topic, () => saved.topic)
+  await update($, decisions, () => saved.decisions)
+  await update($, todos, () => saved.todos)
+  await update($, artifacts, () => saved.artifacts)
+  await update($, log, () => saved.log)
+  await update($, plans, () => saved.plans)
+}
+
 // "Review #2 · Sol · gegen v3 · 1 kritisch", or null before the first review
 export function reviewLine(s: PlanStatus): string | null {
   if (s.latestReview === null) return null
@@ -747,6 +797,13 @@ async function publishToHerdr($: EngineInterface, ended = false) {
   herdr.last = body
   // updatedAt rides outside the comparison, so an unchanged board is not rewritten every second
   await $.fs.write(`${herdr.dir}/${herdr.terminal}.json`, body.replace(/^\{/, `{"updatedAt":${Date.now()},`))
+}
+
+// Marks the last published board as ended (the session's state is already gone at its end)
+async function endInHerdr($: EngineInterface) {
+  if (!herdr?.last) return
+  const board = JSON.parse(herdr.last) as Record<string, unknown>
+  await $.fs.write(`${herdr.dir}/${herdr.terminal}.json`, JSON.stringify({ updatedAt: Date.now(), ...board, ended: true }))
 }
 
 // The intents the sidebar wrote since the last read, oldest first
@@ -842,13 +899,25 @@ export const register: Register = on => {
     void $.clock.every(POLL_MS, async () => {
       if ((await read($, plans)).length > 0) await refresh($)
     })
-    // The person's notes come back on their branch; the board itself starts fresh
+    // The person's notes come back on their branch; the board comes back only to a resumed session
     if ((await read($, notes)).length === 0) {
       try {
         const saved = (await $.store.get(await storeKey($))) as Saved | undefined
         if (saved?.notes?.length) await update($, notes, () => saved.notes ?? [])
       } catch {}
     }
+    // classic.SessionStart, which sets boardId, runs before this hook
+    if (boardId && isResumed) {
+      try {
+        await restoreBoard($, boardId)
+        if ((await read($, plans)).length > 0) await refresh($)
+      } catch {}
+    }
+    void $.clock.every(SAVE_MS, async () => {
+      try {
+        await saveBoard($)
+      } catch {}
+    })
     // In a Herdr terminal the board also goes to the herdr plugin's sidebar
     const terminal = await $.env.get('HC_TERMINAL_ID')
     const home = await $.env.get('HOME')
@@ -861,7 +930,7 @@ export const register: Register = on => {
   // The sidebar greys the board out once the session is gone
   on('session.end', async ($, e, next) => {
     try {
-      await publishToHerdr($, true)
+      await endInHerdr($)
     } catch {}
     return next(e)
   })
@@ -880,6 +949,14 @@ export const register: Register = on => {
       (own ? own + '\n' : '') +
       describeBoard(await readBoard($), await read($, planStatus), await read($, mode), await read($, lastCodeEditAt))
     return { sections: [...sections, { id: 'fokusboard:board', text, scope: 'session' }] }
+  })
+
+  // The transcript's id arrives here, also for --resume, before session.start (which restores the board)
+  on('classic.SessionStart', async ($, e, next) => {
+    lastSaved = ''
+    boardId = e.session_id
+    isResumed = e.source === 'resume' || e.source === 'fork'
+    return next(e)
   })
 
   on('classic.UserPromptSubmit', async ($, e, next) => {
@@ -924,6 +1001,9 @@ export const register: Register = on => {
       await update($, plans, list => list.filter(p => !gone.has(p)))
     }
     await refresh($)
+    try {
+      await saveBoard($)
+    } catch {}
     const status = await read($, planStatus)
     // Opens by itself the first time something lands on an empty board (in Herdr the Fokus button counts instead)
     if (!herdr && isEmpty(before) && (!isEmpty(board) || status.length > 0)) await open($)
