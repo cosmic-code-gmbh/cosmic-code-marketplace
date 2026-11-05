@@ -194,8 +194,7 @@ export default class Fokus extends View {
       .gap(6)
       .p(12)
       .rounded(10)
-      .bg(t.raised)
-      .when(Boolean(color), (el) => el.border_l(3).border_color(color));
+      .bg(color ? tint(color, "26") : t.raised);
   }
 
   notice(t, n) {
@@ -246,9 +245,7 @@ export default class Fokus extends View {
       .gap(8)
       .p(14)
       .rounded(12)
-      .bg(tint(CLAUDE, "14"))
-      .border_1()
-      .border_color(tint(CLAUDE, "44"))
+      .bg(tint(CLAUDE, "44"))
       .child(
         h_flex()
           .gap(8)
@@ -298,9 +295,9 @@ export default class Fokus extends View {
         .gap(8)
         .items_center()
         .cursor_pointer()
-        .when(i > 0, (el) => el.border_t(1).border_color(t.border))
-        .when(isRec, (el) => el.bg(tint(CLAUDE, "1a")))
-        .hover((s) => s.bg(isRec ? tint(CLAUDE, "2c") : t.hover))
+        .rounded(7)
+        .bg(isRec ? tint(CLAUDE, "44") : t.border)
+        .hover((s) => s.bg(isRec ? tint(CLAUDE, "5c") : t.hover))
         .on_hover((h, cx) => {
           this.hover = h ? key : this.hover === key ? null : this.hover;
           cx.notify();
@@ -308,7 +305,7 @@ export default class Fokus extends View {
         .on_click(() => this.send({ do: "answer", id: d.id, option: o }))
         .child(div().flex_1().text_size(12.5).text_color(t.foreground).when(isRec, (el) => el.font_medium()).child(o))
         .when(isRec, (el) =>
-          el.child(div().flex_none().px(6).h(18).flex().items_center().rounded(9).bg(tint(CLAUDE, "33")).text_size(10.5).font_semibold().text_color(CLAUDE).child("Empfohlen")),
+          el.child(div().flex_none().px(6).h(18).flex().items_center().rounded(9).bg(tint(CLAUDE, "66")).text_size(10.5).font_semibold().text_color(CLAUDE).child("Empfohlen")),
         )
         .child(div().flex_none().w(14).text_size(12).text_color(hot ? t.foreground : t.dim).child(hot ? "↵" : ""));
     };
@@ -348,7 +345,7 @@ export default class Fokus extends View {
           .child(div().text_size(13.5).font_medium().line_height(1.4).text_color(t.foreground).child(d.text))
           .when(Boolean(d.context), (el) => el.child(div().text_size(12).line_height(1.45).text_color(t.muted).child(d.context)))
           .when(options.length > 0, (el) =>
-            el.child(v_flex().mt(4).rounded(8).border_1().border_color(t.border).overflow_hidden().children(options.map(option))),
+            el.child(v_flex().mt(4).gap(4).children(options.map(option))),
           )
           .when(Boolean(d.recommended) && !d.options?.includes(d.recommended), (el) =>
             el.child(div().text_size(12).text_color(t.muted).child(`Empfehlung: ${d.recommended}`)),
@@ -357,11 +354,9 @@ export default class Fokus extends View {
       .child(
         h_flex()
           .px(6)
-          .py(4)
+          .pb(5)
           .gap(2)
           .items_center()
-          .border_t(1)
-          .border_color(t.border)
           .child(tool(`reply-${d.id}`, "Antworten", "reply", () => this.send({ do: "reply", id: d.id })))
           .child(tool(`explain-${d.id}`, "Erklären", "sparkles", () => this.send({ do: "explain", id: d.id })))
           .child(tool(`ask-${d.id}`, "Fragen", "help", () => this.send({ do: "ask", ids: [d.id] })))
@@ -467,6 +462,7 @@ export default class Fokus extends View {
       .child(
         v_flex()
           .flex_1()
+          .min_w(0)
           .gap(2)
           .pb(8)
           .child(div().text_size(12).line_height(1.4).text_color(t.muted).child(x.text))
