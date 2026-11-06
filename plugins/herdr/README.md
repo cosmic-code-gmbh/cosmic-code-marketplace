@@ -5,7 +5,7 @@ Marcus' setup for the [Herdr desktop app](https://herdr.dev), in two halves:
 ```
 Claude Code                                Herdr app (~/.config/herdr-app)
 ───────────                                ───────────────────────────────
-plugin herdr                               mods/tabs-run      top bar: "Artefakte ▾", Fokus button
+plugin herdr                               mods/tabs-run      top bar: sound mute, "Artefakte ▾", Fokus
   hooks/bridge.ts ── every Artifact ──┐    mods/artifacts     the dropdown
   (PostToolUse)      publish          │    mods/fokus         the Fokus sidebar (see below)
                                       │    mods/spaces-icons  Spaces sidebar with app icons per space
@@ -20,6 +20,12 @@ plugin herdr                               mods/tabs-run      top bar: "Artefakt
                                         │
                                         └──▶ read by mods/artifacts
 ```
+
+## Sound mute
+
+The speaker button left of "Artefakte" creates or removes `~/.claude/sounds/wc3/.muted`.
+A sound hook that checks this file before playing (here `~/.claude/hooks/wc3-sound.sh`, not part
+of this plugin) stays silent while it exists; a red crossed-out speaker shows it is on.
 
 ## Space icons
 

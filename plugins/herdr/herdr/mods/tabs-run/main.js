@@ -1,6 +1,6 @@
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { spaces, panes, focused, run, openOverlay, theme, window, shared, layout, settings, home, readTextFile, watchFolder } from "herdr";
+import { spaces, panes, focused, run, openOverlay, theme, window, shared, layout, settings, home, readTextFile, watchFolder, exec } from "herdr";
 // Copy of mods/run-scripts/scripts.js (a mod can only import from its own folder).
 import { findProject, control } from "./scripts.js";
 
@@ -9,9 +9,12 @@ import { findProject, control } from "./scripts.js";
 // a "Fokus" panel button (mods/fokus) that counts the focused Claude session's open questions.
 // Tabs nobody named take the name of their Claude session's Fokusboard thread, kept up to date;
 // a name someone typed is left alone. Each Claude tab shows its open questions as a red badge.
+// A speaker button mutes the Claude Code sounds (~/.claude/hooks/wc3-sound.sh): it
+// creates or removes MUTED, which the hook checks before playing.
 // Used by layouts/main-filetree.json.
 
 const FOKUS = `${home()}/.local/state/fokusboard`;
+const MUTED = `${home()}/.claude/sounds/wc3/.muted`;
 // Only a guard against runaway titles: the tab bar and the Agents list cut names by
 // their width, so a wider sidebar shows more.
 const TAB_NAME_MAX = 120;
@@ -65,6 +68,11 @@ export default class Tabs extends View {
     for (const [id, v] of Object.entries(this.autoNames)) if (!Array.isArray(v)) this.autoNames[id] = [v];
     this.questions = {}; // tab id → open questions on its Claude session's Fokusboard
     cx.timer.every(15000, (cx) => this.detect(cx, true));
+    this.muted = false;
+    cx.spawn(async (cx) => {
+      this.muted = (await exec("test", ["-e", MUTED]).catch(() => ({ code: 1 }))).code === 0;
+      cx.notify();
+    });
     // A board change wakes this at once. The look every 5 s catches what the watch
     // can't: a change between reading and watching again, and a tab whose agent
     // Herdr only recognised after its board was written (a new tab, a restart).
@@ -234,6 +242,20 @@ export default class Tabs extends View {
       .on_scroll_wheel(e => { if (Math.abs(e.delta.y) >= 1) run(e.delta.y > 0 ? "tab.prev" : "tab.next"); })
       .child(h_flex().id("tab-scroll").flex_1().min_w(0).h_full().items_center().gap(3).overflow_x_scrollbar().children(shown.map(item)))
       .child(button("tab-new", "+", () => openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 })))
+      .child(div().id("sound").size(26).flex_none().flex().items_center().justify_center().rounded(6)
+        .text_color(this.muted ? t.blocked : t.dim).hover(s => s.bg(t.hover).text_color(t.foreground)).on_mouse_down("left", stop)
+        .tooltip(this.muted ? "Sounds are off: click to turn them on" : "Mute Claude sounds")
+        .on_click((_e, cx) => {
+          const on = !this.muted;
+          this.muted = on;
+          cx.notify();
+          cx.spawn(async (cx) => {
+            // fs writes only under the app home: the file is made and removed by exec.
+            const r = on ? await exec("sh", ["-c", 'mkdir -p "$(dirname "$1")" && touch "$1"', "sh", MUTED]) : await exec("rm", ["-f", MUTED]);
+            if (r.code !== 0) { this.muted = !on; cx.notify(); }
+          });
+        })
+        .child(svg(`mods/tabs-run/${this.muted ? "volume-x" : "volume-2"}.svg`).size(15)))
       .child(h_flex().id("artifacts").h(26).px(8).gap(5).flex_none().items_center().rounded(6)
         .text_size(12).bg(t.chrome).text_color(t.muted).hover(s => s.bg(t.hover)).on_mouse_down("left", stop)
         .on_click(() => openOverlay({ mod: "artifacts", kind: "popup", width: 400, height: 560, props: { terminal: focused()?.terminal ?? null } }))
