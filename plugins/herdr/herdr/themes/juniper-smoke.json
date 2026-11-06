@@ -1,0 +1,24 @@
+{
+  "background": "#171b18",
+  "foreground": "#ccd5cd",
+  "selection": "#1e2420",
+  "cursor": "#a9c7ad",
+  "ansi": [
+    "#232823",
+    "#d59090",
+    "#99bd9b",
+    "#d3bb8b",
+    "#8ea8c0",
+    "#b39cbb",
+    "#92bab2",
+    "#b4bfb5",
+    "#5d6a5f",
+    "#e2a8a8",
+    "#b1d1b2",
+    "#e3cea4",
+    "#a7bed3",
+    "#c8b3cf",
+    "#abd0c8",
+    "#e8ede8"
+  ]
+}

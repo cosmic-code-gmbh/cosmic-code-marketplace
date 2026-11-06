@@ -76,8 +76,8 @@
     {
       "name": "herdr",
       "source": "./plugins/herdr",
-      "description": "Herdr desktop setup: Fokus sidebar tab (live Fokusboard), Artefakte dropdown with all claude.ai artifacts, tabs-run bar, layout, settings and keys.",
-      "version": "0.7.1",
+      "description": "Herdr desktop setup: Fokus sidebar tab (live Fokusboard), Artefakte dropdown with all claude.ai artifacts, tabs-run bar, layout, settings, keys and Rex color themes.",
+      "version": "0.9.0",
       "author": {
         "name": "Marcus Thor"
       }

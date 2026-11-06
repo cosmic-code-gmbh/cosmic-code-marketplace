@@ -13,6 +13,7 @@ plugin herdr                               mods/tabs-run      top bar: sound mut
                                       │    mods/menu-icons    space menu: Icon & color…
                                       │    layouts/main-filetree.json
   skill artifacts-refresh ──┐         │    settings.json, keys.json
+                            │         │    themes/*.json      41 Rex color themes
                             │         ▼
                             │   ~/.local/state/herdr-artifacts/
                             └──▶  catalog.jsonl    all claude.ai artifacts (snapshot)
@@ -20,6 +21,13 @@ plugin herdr                               mods/tabs-run      top bar: sound mut
                                         │
                                         └──▶ read by mods/artifacts
 ```
+
+## Themes
+
+`herdr/themes/` holds the 41 color themes of the Rex terminal (27 dark, 14 light), converted
+to Herdr's theme format. Pick one in Settings → Theme. Rex draws selections inverted; Herdr has
+one selection color, so each theme's selection is its background mixed 30 % toward the
+foreground.
 
 ## Sound mute
 
@@ -157,7 +165,7 @@ Then copy the Herdr half into the app, from a clone of this repo or from the ins
 sh ~/.claude/plugins/cache/cosmic-code-marketplace/herdr/*/install.sh
 ```
 
-`install.sh` copies the mods, the layout, `settings.json` and `keys.json`. Any file you
+`install.sh` copies the mods, the layout, `settings.json`, `keys.json` and the themes. Any file you
 changed is moved to `~/.config/herdr-app/backup-<time>/` first. The layout also uses `filetree`,
 `file-icons`, `run-scripts` and `session-bar` from
 [cybertron288/herdr-mods](https://github.com/cybertron288/herdr-mods). When they are missing,

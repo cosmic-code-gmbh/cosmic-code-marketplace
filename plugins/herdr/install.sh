@@ -1,6 +1,6 @@
 #!/bin/sh
 # Installs the Herdr half of this plugin into the Herdr app home: the artifacts and tabs-run
-# mods, the main-filetree layout, settings.json and keys.json. Anything that differs is moved
+# mods, the main-filetree layout, settings.json, keys.json and the Rex color themes. Anything that differs is moved
 # to <app home>/backup-<time>/ first (outside mods/, so Herdr does not load it). Mods the layout needs from
 # cybertron288/herdr-mods (filetree, file-icons, run-scripts, session-bar) are installed
 # from that repo when missing.
@@ -30,7 +30,7 @@ keep() {
   fi
 }
 
-mkdir -p "$home_dir/mods" "$home_dir/layouts"
+mkdir -p "$home_dir/mods" "$home_dir/layouts" "$home_dir/themes"
 for mod in "$here"/herdr/mods/*/; do
   name=$(basename "$mod")
   target="$home_dir/mods/$name"
@@ -44,6 +44,13 @@ for f in layouts/main-filetree.json settings.json keys.json; do
   cp "$here/herdr/$f" "$home_dir/$f"
   echo "added  $home_dir/$f"
 done
+# Themes only add files; Herdr's own (atom-one-dark, win98) stay untouched.
+for t in "$here"/herdr/themes/*.json; do
+  f="themes/$(basename "$t")"
+  keep "$f" "$t"
+  cp "$t" "$home_dir/$f"
+done
+echo "added  $home_dir/themes ($(ls "$here"/herdr/themes | wc -l | tr -d ' ') themes)"
 
 missing=""
 for m in filetree file-icons run-scripts session-bar; do
