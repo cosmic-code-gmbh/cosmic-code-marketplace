@@ -604,8 +604,6 @@ export default class Fokus extends View {
       .px(14)
       .gap(6)
       .items_center()
-      .border_t(1)
-      .border_color(t.border)
       .text_size(11)
       .text_color(t.dim)
       .child(div().child(this.terminal))

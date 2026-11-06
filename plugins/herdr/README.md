@@ -5,12 +5,14 @@ Marcus' setup for the [Herdr desktop app](https://herdr.dev), in two halves:
 ```
 Claude Code                                Herdr app (~/.config/herdr-app)
 ───────────                                ───────────────────────────────
-plugin herdr                               mods/tabs-run      top bar: sound mute, "Artefakte ▾", Fokus
+plugin herdr                               mods/tabs-run      top bar: tabs fold, sound mute, "Artefakte ▾", Fokus
   hooks/bridge.ts ── every Artifact ──┐    mods/artifacts     the dropdown
   (PostToolUse)      publish          │    mods/fokus         the Fokus sidebar (see below)
                                       │    mods/spaces-icons  Spaces sidebar with app icons per space
                                       │    mods/agents-icons  Agents list: space icons, helpers, shelves
                                       │    mods/menu-icons    space menu: Icon & color…
+                                      │    mods/session-bar-icons  bottom bar: Claude left, git right
+                                      │    mods/workspace-chrome-icons  sidebar footer without its line
                                       │    layouts/main-filetree.json
   skill artifacts-refresh ──┐         │    settings.json, keys.json
                             │         │    themes/*.json      41 Rex color themes
@@ -28,6 +30,26 @@ plugin herdr                               mods/tabs-run      top bar: sound mut
 to Herdr's theme format. Pick one in Settings → Theme. Rex draws selections inverted; Herdr has
 one selection color, so each theme's selection is its background mixed 30 % toward the
 foreground.
+
+## Bottom bar
+
+`mods/session-bar-icons` is a copy of `session-bar` from
+[cybertron288/herdr-mods](https://github.com/cybertron288/herdr-mods): the Claude chips (model,
+effort, ctx / 5h / 7d) sit on the left with the Claude Code robot as icon, folder, branch and git
+chips on the right. The meters still come from session-bar's Claude Code plugin, so
+`install.sh` keeps installing `session-bar` too.
+
+## Tabs fold away
+
+The sidebar already lists every agent and terminal, so the top bar starts with its tabs folded
+behind a button at the left end: `» 6` (6 tabs, a red dot when one has open questions). Click
+it to show the tabs, click `«` to fold them again. The choice is remembered.
+
+## No separator lines
+
+The layout has no divider between sidebar and work area, and the tab bar, the bottom bar, the
+sidebar footer (`workspace-chrome-icons`, a clone of Herdr's `workspace-chrome`) and the Fokus
+panel footer draw no border lines.
 
 ## Sound mute
 

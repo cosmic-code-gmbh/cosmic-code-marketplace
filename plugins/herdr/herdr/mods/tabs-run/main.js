@@ -9,6 +9,8 @@ import { findProject, control } from "./scripts.js";
 // a "Fokus" panel button (mods/fokus) that counts the focused Claude session's open questions.
 // Tabs nobody named take the name of their Claude session's Fokusboard thread, kept up to date;
 // a name someone typed is left alone. Each Claude tab shows its open questions as a red badge.
+// The tabs fold away behind a button at the left end (the sidebar lists the same agents and
+// terminals); folded, it shows how many tabs there are and a red dot when one has questions.
 // A speaker button mutes the Claude Code sounds (~/.claude/hooks/wc3-sound.sh): it
 // creates or removes MUTED, which the hook checks before playing.
 // Used by layouts/main-filetree.json.
@@ -60,6 +62,7 @@ export default class Tabs extends View {
   init(_props, cx) {
     this.pressed = null;
     this.panels = JSON.parse(localStorage.getItem("panels") ?? "{}");
+    this.tabsOpen = localStorage.getItem("tabsOpen") === "1";
     this.project = null;
     this.fokus = null; // { terminal, open, blocking } of the focused terminal's Fokusboard
     // tab id → the names this mod gave it, newest last. Older ones count too: a rename
@@ -236,11 +239,22 @@ export default class Tabs extends View {
         .when(Boolean(badge), el => el.child(div().h(16).min_w(16).px(4).flex().items_center().justify_center().rounded(8)
           .bg(badge.color).text_color(t.solid_foreground ?? t.background).text_size(10.5).font_semibold().child(String(badge.count))));
     };
+    const asking = shown.some((c) => this.questions[c.id]);
+    const tabsToggle = h_flex().id("tabs-toggle").h(26).px(6).gap(4).flex_none().items_center().rounded(6)
+      .text_size(12).text_color(this.tabsOpen ? t.foreground : t.muted).hover(s => s.bg(t.hover).text_color(t.foreground)).on_mouse_down("left", stop)
+      .tooltip(this.tabsOpen ? "Hide tabs" : "Show tabs")
+      .on_click((_e, cx) => { this.tabsOpen = !this.tabsOpen; localStorage.setItem("tabsOpen", this.tabsOpen ? "1" : "0"); cx.notify(); })
+      .child(svg(`mods/tabs-run/${this.tabsOpen ? "chevrons-left" : "chevrons-right"}.svg`).size(14))
+      .when(!this.tabsOpen, el => el.child(String(shown.length)))
+      .when(!this.tabsOpen && asking, el => el.child(div().size(6).rounded(3).bg(t.blocked)));
     const fokusBadge = this.fokus?.open ? { count: this.fokus.open, color: t.blocked } : null;
-    return h_flex().size_full().min_w(0).px(10).pl(lightsPadding).gap(3).items_center().bg(t.chrome).border_b(1).border_color(t.border)
+    return h_flex().size_full().min_w(0).px(10).pl(lightsPadding).gap(3).items_center().bg(t.chrome)
       .on_mouse_up("left", () => { this.pressed = null; })
       .on_scroll_wheel(e => { if (Math.abs(e.delta.y) >= 1) run(e.delta.y > 0 ? "tab.prev" : "tab.next"); })
-      .child(h_flex().id("tab-scroll").flex_1().min_w(0).h_full().items_center().gap(3).overflow_x_scrollbar().children(shown.map(item)))
+      .child(tabsToggle)
+      .child(this.tabsOpen
+        ? h_flex().id("tab-scroll").flex_1().min_w(0).h_full().items_center().gap(3).overflow_x_scrollbar().children(shown.map(item))
+        : div().flex_1().min_w(0))
       .child(button("tab-new", "+", () => openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 })))
       .child(div().id("sound").size(26).flex_none().flex().items_center().justify_center().rounded(6)
         .text_color(this.muted ? t.blocked : t.dim).hover(s => s.bg(t.hover).text_color(t.foreground)).on_mouse_down("left", stop)
