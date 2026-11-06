@@ -33,6 +33,17 @@ function where() {
   return { cwd: pane?.cwd ?? f?.cwd ?? space?.folder ?? null, on };
 }
 
+// What a tab is called when nobody named it: the agent's own terminal title when it
+// says something (Claude sets one per conversation), else the program. The same rule
+// as agents-icons' title(), so the bar and the Agents list read alike.
+const clean = (s) => (s ?? "").replace(/^[^\p{L}\p{N}]+/u, "").trim();
+function liveTitle(pane) {
+  const live = clean(pane?.title);
+  const prog = pane?.program;
+  const telling = live && live !== prog?.name && !/^[~/]|^[A-Za-z]:\\/.test(live) && !live.includes("@") && live.toLowerCase() !== prog?.key;
+  return telling ? live : null;
+}
+
 function find(node, id) {
   if (node?.id === id) return node;
   for (const child of node?.children ?? []) {
@@ -48,16 +59,33 @@ export default class Tabs extends View {
     this.panels = JSON.parse(localStorage.getItem("panels") ?? "{}");
     this.project = null;
     this.fokus = null; // { terminal, open, blocking } of the focused terminal's Fokusboard
-    this.autoNames = JSON.parse(localStorage.getItem("autoNames") ?? "{}"); // tab id → the name this mod gave it
+    // tab id → the names this mod gave it, newest last. Older ones count too: a rename
+    // that never landed must not make the tab look named by hand.
+    this.autoNames = JSON.parse(localStorage.getItem("autoNames") ?? "{}");
+    for (const [id, v] of Object.entries(this.autoNames)) if (!Array.isArray(v)) this.autoNames[id] = [v];
     this.questions = {}; // tab id → open questions on its Claude session's Fokusboard
     cx.timer.every(15000, (cx) => this.detect(cx, true));
+    // A board change wakes this at once. The look every 5 s catches what the watch
+    // can't: a change between reading and watching again, and a tab whose agent
+    // Herdr only recognised after its board was written (a new tab, a restart).
     cx.spawn(async (cx) => {
       for (;;) {
-        await this.countQuestions(cx);
-        await this.readTabs(cx);
+        await this.refresh(cx);
         try { await watchFolder(FOKUS); } catch { await new Promise((r) => cx.timer.after(5000, r)); }
       }
     });
+    cx.timer.every(5000, (cx) => { cx.spawn(async (cx) => this.refresh(cx)); });
+  }
+
+  // One look at a time; nothing that fails ends the watch loop.
+  async refresh(cx) {
+    if (this.refreshing) return;
+    this.refreshing = true;
+    try {
+      await this.countQuestions(cx);
+      await this.readTabs(cx);
+    } catch {}
+    this.refreshing = false;
   }
 
   // Reads each Claude tab's Fokusboard: its open questions for the badge, and its thread as the
@@ -76,11 +104,12 @@ export default class Tabs extends View {
       const open = board.ended ? 0 : (board.decisions ?? []).length;
       if (open) questions[tab.id] = open;
       // Unnamed, named by this mod, or named after its program ("Claude Code", as the new-tab menu does)
-      const isDefault = !tab.named || tab.name === this.autoNames[tab.id] || tab.name === agent.program.name;
+      const given = this.autoNames[tab.id] ?? [];
+      const isDefault = !tab.named || given.includes(tab.name) || tab.name === agent.program.name;
       const name = shortName(board.thread?.title ?? board.topic?.title);
       if (!isDefault || !name || name === tab.name) continue;
       run("tab.rename", { id: tab.id, name });
-      this.autoNames[tab.id] = name;
+      this.autoNames[tab.id] = [...given.filter((n) => n !== name), name].slice(-10);
       named = true;
     }
     // Forget tabs that are gone
@@ -155,9 +184,11 @@ export default class Tabs extends View {
     const button = (id, label, action) => div().id(id).size(26).flex_none().flex().items_center().justify_center().rounded(6).text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
       .on_mouse_down("left", stop).on_click(action).child(label);
     const item = (c, i) => {
-      const program = panes().find(p => p.tab === c.id && p.program?.agent)?.program ?? panes().find(p => p.tab === c.id)?.program;
-      // An unnamed tab is called by its position ("2"): show its program instead
-      const name = !c.named || /^tb\d+$/.test(c.name) ? program?.name ?? "Terminal" : c.name;
+      const lead = panes().find(p => p.tab === c.id && p.program?.agent) ?? panes().find(p => p.tab === c.id);
+      const program = lead?.program;
+      // An unnamed tab (called by its position, "2") or one named after its program
+      // shows the agent's live title, else its program
+      const name = !c.named || /^tb\d+$/.test(c.name) || c.name === program?.name ? liveTitle(lead) ?? program?.name ?? "Terminal" : c.name;
       return h_flex().id(`tab-${c.id}`).h(29).px(10).gap(7).rounded(7).items_center().flex_none().text_size(12.8)
         .border(1).border_color(c.active ? t.border : t.chrome).bg(c.active ? t.raised : t.chrome).text_color(c.active ? t.foreground : t.muted)
         .hover(s => s.bg(t.hover))

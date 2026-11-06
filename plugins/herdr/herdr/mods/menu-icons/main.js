@@ -1,12 +1,12 @@
 // Context menus (Herdr's items). Opened as a popup with
 // props { tab: "pane" | "tab" | "space" | "global", target }.
 // ↑/↓ move, Enter runs, Esc closes. An item is [label, command, args];
-// a command "worktree" opens the worktree dialog instead. The space menu also sets
-// or removes the space's icon; spaces-icons does the picking (it outlives this popup).
+// a command "worktree" opens the worktree dialog instead, "space-look" spaces-icons'
+// icon & color popup (it also starts the image picker, which outlives this popup).
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { run, props, closeOverlay, openOverlay, theme, keys, terminals, spaces, panes, exec, shared } from "herdr";
+import { run, props, closeOverlay, openOverlay, theme, keys, terminals, spaces, panes, exec } from "herdr";
 
 // Where a space is now: its first terminal's live folder, else where it was made.
 function place(s) {
@@ -57,8 +57,7 @@ function items(p, git) {
     case "space":
       return [
         ["Rename", "space.rename", { id: tg.id }],
-        [(shared("space.icons") ?? {})[tg.id] ? "Change icon…" : "Choose icon…", `spaces-icons.icon:${tg.id}`, {}],
-        ...((shared("space.icons") ?? {})[tg.id] ? [["Remove icon", `spaces-icons.unicon:${tg.id}`, {}]] : []),
+        ["Icon & color…", "space-look", { id: tg.id }],
         ...(git ? [["New worktree", "worktree", { space: tg.id, action: "new" }], ["Open worktree", "worktree", { space: tg.id, action: "open" }]] : []),
         ...(git === "linked" ? [["Remove worktree", "worktree", { space: tg.id, action: "remove" }]] : []),
         ["Close", "space.close", { id: tg.id }],
@@ -76,6 +75,7 @@ function items(p, git) {
 }
 
 function menuIcon(command) {
+  if (command === "space-look") return "mods/spaces-icons/glyphs/palette.svg";
   const name = command.endsWith(".close") ? "x" : command.endsWith(".rename") ? "square-pen" : command.endsWith(".new") ? "plus" : command === "worktree" ? "git-branch" : command.startsWith("spaces-icons.") ? "square" : command === "app.help" ? "terminal" : command === "app.theme" ? "settings" : command === "pane.split" ? "panel-right" : command === "pane.zoom" ? "square" : "terminal";
   return `mods/workspace-chrome/${name}.svg`;
 }
@@ -108,7 +108,8 @@ export default class Menu extends View {
     const it = items(props(), this.git)[i];
     if (!it) return;
     closeOverlay(props()?.overlay);
-    if (it[1] === "worktree") openOverlay({ mod: "worktree", kind: "dialog", ...(it[2].action === "open" ? { width: 560, height: 480 } : { width: 440, height: 260 }), props: it[2] });
+    if (it[1] === "space-look") openOverlay({ mod: "spaces-icons", kind: "popup", width: 336, height: 340, props: { iconPicker: it[2].id } });
+    else if (it[1] === "worktree") openOverlay({ mod: "worktree", kind: "dialog", ...(it[2].action === "open" ? { width: 560, height: 480 } : { width: 440, height: 260 }), props: it[2] });
     else run(it[1], it[2]);
   }
 

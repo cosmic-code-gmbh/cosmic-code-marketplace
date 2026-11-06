@@ -6,10 +6,14 @@
 // shared "space.icons" = { spaceId: path under appHome() }. Set it by dropping an
 // image or .app on the row, or from the space menu (menu-icons sends
 // "spaces-icons.icon:<id>" / "spaces-icons.unicon:<id>"); agents-icons shows it too.
+// Without a picture a space shows a generic icon (shared "space.glyphs" = { spaceId:
+// name from DUO }) or its first letter, white on its color (shared
+// "space.colors"). Both are picked in this mod's popup (props { iconPicker: spaceId }),
+// which the space menu opens as "Icon & color…".
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { spaces, machines, panes, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout, nextCommand, appHome, notify, readTextFile } from "herdr";
+import { spaces, machines, panes, run, openOverlay, closeOverlay, props, exec, hc, theme, shared, setShared, watchFolder, window, layout, nextCommand, appHome, notify, readTextFile } from "herdr";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -39,6 +43,37 @@ const FALLBACK = 60000;
 // What a stored color name looks like on an avatar (the same in every mod
 // that draws space avatars): one strong color per hue, light and dark alike.
 const MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
+// What the picker offers: the six above (also handed out to new spaces), then six more, stored as hex.
+const COLORS = [...Object.keys(MARK), "#e05757", "#e5b93a", "#5fb3d9", "#c06cd6", "#8a7360", "#7a8696"];
+const fillOf = (c, t) => (c.startsWith("#") ? c : (MARK[c] ?? t[c]));
+
+// Our own duotone icons, mods/spaces-icons/glyphs/duo-<name>.svg: an outline plus a
+// 35 % fill, both currentColor, so they read white on a space's color as well.
+const DUO = "terminal code braces branch rocket database cloud bug package bolt layers bot flask globe sparkles shield".split(" ").map((n) => `duo-${n}`);
+// A stored name no longer offered (an earlier icon set) falls back to the letter.
+const glyphOf = (id) => {
+  const name = (shared("space.glyphs") ?? {})[id];
+  return DUO.includes(name) ? name : null;
+};
+
+function setGlyph(id, name) {
+  const glyphs = { ...(shared("space.glyphs") ?? {}) };
+  if (name) glyphs[id] = name;
+  else delete glyphs[id];
+  setShared("space.glyphs", glyphs);
+}
+
+// A space's avatar: its picture, else its icon or first letter, white on its color.
+function avatar(w, size, t) {
+  const pic = (shared("space.icons") ?? {})[w.id];
+  const radius = Math.round(size * 0.28);
+  if (pic) return image(pic).w(size).h(size).flex_none().rounded(radius);
+  const glyph = glyphOf(w.id);
+  return h_flex().size(size).flex_none().rounded(radius).bg(fillOf((shared("space.colors") ?? {})[w.id] ?? "ansi6", t)).items_center().justify_center()
+    .child(glyph
+      ? svg(`mods/spaces-icons/glyphs/${glyph}.svg`).size(Math.round(size * 0.8)).text_color("#ffffff")
+      : div().text_size(size * 0.58).font_bold().text_color("#ffffff").child([...w.name][0]?.toUpperCase() ?? "?"));
+}
 
 // A space speaks up only when something in it needs you.
 export function glyph(status) {
@@ -107,6 +142,7 @@ async function pickIcon(id, name) {
 
 export default class Spaces extends View {
   init(_props, cx) {
+    if (props()?.iconPicker) return;
     this.git = {}; // where() -> { name, branch, ahead, behind, repo, linked }, null: not a repo
     this.checked = {}; // where() -> when it was last looked at
     this.unsure = new Set(); // where()s git couldn't answer for (a machine away)
@@ -455,10 +491,6 @@ export default class Spaces extends View {
   row({ w, i, g, tree }, t) {
     const on = w.active;
     const fromIndex = this.pressed === null ? -1 : spaces().findIndex(s => s.id === this.pressed);
-    const colors = shared("space.colors") ?? {};
-    const color = colors[w.id] ?? "ansi6";
-    const fill = color.startsWith("#") ? color : (MARK[color] ?? t[color]);
-    const pic = (shared("space.icons") ?? {})[w.id];
     return v_flex()
       .relative()
       .id(`space-${w.id}`)
@@ -508,15 +540,15 @@ export default class Spaces extends View {
           .gap(9)
           .items_center()
           .when(Boolean(tree), el => el.pl(22).child(svg("mods/workspace-chrome/branch.svg").size(13).text_color(t.dim)))
-          .when(!tree && Boolean(pic), el => el.child(image(pic).w(18).h(18).flex_none().rounded(5)))
-          .when(!tree && !pic, el => el.child(h_flex().size(18).flex_none().rounded(5).bg(fill).items_center().justify_center().text_size(10.5).font_bold().text_color("#ffffff").child([...w.name][0]?.toUpperCase() ?? "?")))
+          .when(!tree, el => el.child(avatar(w, 18, t)))
           .child(div().flex_shrink(0).max_w(150).truncate().text_color(t.foreground).child(w.name))
           .child(g ? this.gitTail(g, tree, w.name, t) : div().flex_1()),
       );
   }
 
   compact({ w, i }, t) {
-    const pic = (shared("space.icons") ?? {})[w.id];
+    // The rail shows the space's number unless it has a picture or an icon.
+    const own = (shared("space.icons") ?? {})[w.id] || glyphOf(w.id);
     return h_flex()
       .id(`space-${w.id}`)
       .h(26)
@@ -526,12 +558,51 @@ export default class Spaces extends View {
       .when(w.active, (el) => el.bg(t.raised))
       .hover((s) => s.bg(t.hover))
       .on_click(() => run("space.select", { id: w.id }))
-      .child(pic ? image(pic).w(16).h(16).flex_none().rounded(4) : div().text_color(w.active ? t.foreground : t.muted).child(String(i + 1)))
+      .child(own ? avatar(w, 16, t) : div().text_color(w.active ? t.foreground : t.muted).child(String(i + 1)))
       .child(div().text_color(tone(t, w.status)).child(glyph(w.status)));
+  }
+
+  // The "Icon & color…" popup: a preview, the colors, then the icons (the letter first),
+  // and the picture choices. Every pick applies at once; the popup stays open.
+  picker(t) {
+    const id = props().iconPicker;
+    const w = spaces().find((s) => s.id === id);
+    if (!w) return div().p(12).bg(t.popover).text_color(t.dim).child("This space is gone.");
+    const color = (shared("space.colors") ?? {})[id] ?? "ansi6";
+    const glyph = glyphOf(id);
+    const pic = (shared("space.icons") ?? {})[id];
+    const label = (text) => div().pt(10).pb(6).text_size(11).text_color(t.dim).child(text);
+    // An icon or the letter replaces a picture: otherwise the pick wouldn't show.
+    const pickGlyph = (name, cx) => { setGlyph(id, name); if (pic) clearIcon(id); cx.notify(); };
+    const tile = (name) => h_flex().id(`glyph-${name ?? "letter"}`).size(30).flex_none().rounded(7).items_center().justify_center()
+      .cursor_pointer().text_color(t.foreground)
+      .when(!pic && glyph === name, (el) => el.bg(t.selected))
+      .hover((s) => s.bg(t.hover))
+      .tooltip(name ? name.replace(/^duo-/, "") : "First letter")
+      .on_click((_e, cx) => pickGlyph(name, cx))
+      .child(name ? svg(`mods/spaces-icons/glyphs/${name}.svg`).size(16) : div().text_size(13).font_bold().child([...w.name][0]?.toUpperCase() ?? "?"));
+    const action = (key, text, onClick) => h_flex().id(key).h(28).px(8).rounded(7).items_center().text_color(t.foreground)
+      .hover((s) => s.bg(t.hover)).on_click(onClick).child(text);
+    return v_flex().w_full().p(12).bg(t.popover).text_size(12.8)
+      .child(h_flex().gap(10).items_center().child(avatar(w, 28, t)).child(div().flex_1().truncate().text_color(t.foreground).font_semibold().child(w.name)))
+      .child(label("Color"))
+      .child(h_flex().flex_wrap().gap(6).children(COLORS.map((c) => div().id(`color-${c}`).size(20).flex_none().rounded(10).bg(fillOf(c, t))
+        .cursor_pointer().border(2).border_color(c === color ? t.foreground : t.popover)
+        .on_click((_e, cx) => { setShared("space.colors", { ...(shared("space.colors") ?? {}), [id]: c }); cx.notify(); }))))
+      .child(label("Icon"))
+      .child(h_flex().flex_wrap().gap(2).children([tile(null), ...DUO.map(tile)]))
+      .child(div().my(6).h(1).bg(t.border))
+      .child(action("pick-image", pic ? "Change image…" : "Choose image…", () => {
+        // spaces-icons' sidebar view runs the file picker: a popup's tasks end when it closes.
+        closeOverlay(props().overlay);
+        run(`spaces-icons.icon:${id}`, {});
+      }))
+      .when(Boolean(pic), (el) => el.child(action("remove-image", "Remove image", (_e, cx) => { clearIcon(id); cx.notify(); })));
   }
 
   render() {
     const t = theme();
+    if (props()?.iconPicker) return this.picker(t);
     const collapsed = narrow();
     const palette = ["ansi6", "ansi3", "ansi4", "ansi5", "ansi2", "ansi1"];
     const sp = spaces();

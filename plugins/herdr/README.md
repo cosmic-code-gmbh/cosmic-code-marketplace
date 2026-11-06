@@ -10,7 +10,7 @@ plugin herdr                               mods/tabs-run      top bar: "Artefakt
   (PostToolUse)      publish          │    mods/fokus         the Fokus sidebar (see below)
                                       │    mods/spaces-icons  Spaces sidebar with app icons per space
                                       │    mods/agents-icons  Agents list: space icons, helpers, shelves
-                                      │    mods/menu-icons    space menu: Choose / Remove icon
+                                      │    mods/menu-icons    space menu: Icon & color…
                                       │    layouts/main-filetree.json
   skill artifacts-refresh ──┐         │    settings.json, keys.json
                             │         ▼
@@ -23,12 +23,20 @@ plugin herdr                               mods/tabs-run      top bar: "Artefakt
 
 ## Space icons
 
-A space can show its own icon (a product's app icon) instead of the colored letter. Right-click
-the space → **Choose icon…** (an image or a `.app`), or drop an image or `.app` on its row.
-The Agents list then shows that icon next to the agent's icon instead of the space name;
-a space without one shows its colored letter there, as in the Spaces list.
-Icons are stored as 128 px PNGs in `~/.config/herdr-app/space-icons/`, the mapping in shared
-`space.icons`. The three mods are clones of Herdr's `spaces`, `agents` and `menu` (Herdr replaces
+Each space has an avatar: its own picture, else a duotone icon or its first letter, white on
+the space's color. Right-click the space → **Icon & color…** opens a popup with 12 colors,
+16 duotone coding icons (terminal, braces, branch, rocket, database, …) and **Choose image…**
+(an image or a `.app`); dropping an image or `.app` on the row works too. A picture wins over
+an icon; picking an icon removes the picture.
+
+```
+shared space.colors  { spaceId: "ansi6" | "#hex" }      mods/spaces-icons (popup + sidebar)
+shared space.glyphs  { spaceId: "duo-rocket" }          glyphs/duo-*.svg: outline + 35 % fill,
+shared space.icons   { spaceId: "space-icons/x.png" }     both currentColor
+```
+
+Pictures are stored as 128 px PNGs in `~/.config/herdr-app/space-icons/`. The Agents list shows
+the same avatar next to the agent's icon where no space header names the space. The three mods are clones of Herdr's `spaces`, `agents` and `menu` (Herdr replaces
 shipped mods on start), and the layout points at them.
 
 ## Helpers under each agent
@@ -38,13 +46,17 @@ sub-rows with a spinner and the running time:
 
 ```
 Claude terminal (HC_TERMINAL_ID=t20)
- ├─ Bash → scripts/sol → codex exec   mods/agents-icons/hidden.js: pgrep + ps -E every 3 s,
- │                                    tied to the agent by the process's HC_TERMINAL_ID
+ ├─ Bash tool: background task,       mods/agents-icons/hidden.js: every 3 s, ps -A for the
+ │  Monitor listener, long command    claude process's Bash children (≥ 2 s old), ps -E only
+ ├─ Bash → scripts/sol → codex exec   for the HC_TERMINAL_ID of claude/codex processes
  └─ Agent tool → subagent             hooks/subagents.ts: one file per running subagent in
-                                      ~/.local/state/herdr-subagents/ (watched by the mod)
+                                      ~/.local/state/herdr-subagents/ (watched, and read
+                                      every 3 s for changes the watch missed)
 ```
 
-Codex runs started by `scripts/sol` read "Sol". Subagents (Agent tool, `/simplify`, workflows)
+A Bash row shows the command itself (first line, without a leading `cd … &&`). Codex runs
+started by `scripts/sol` read "Sol". The process rows need no hook and work in sessions that
+were already running. Subagents (Agent tool, `/simplify`, workflows)
 carry the Agent call's description when there is one, else their type. Restart Claude Code
 sessions after installing so the hooks load.
 
@@ -104,7 +116,9 @@ board, so you see at a glance where an answer is waiting.
 
 **Tab names:** a tab running Claude Code takes its board's thread title ("Worum es geht"), whole
 (the tab bar cuts it by width), and follows it when the thread changes. A tab you named yourself keeps its name;
-rename it to "" to hand it back.
+rename it to "" to hand it back. Before the board has a thread, the tab shows Claude's own
+terminal title, as the Agents list does. The board folder is watched and also read every 5 s,
+so a change the watch missed, or a tab Herdr recognised late, still gets its name.
 
 Needs `fokusboard@cosmic-code-marketplace` 0.9.0 or later.
 

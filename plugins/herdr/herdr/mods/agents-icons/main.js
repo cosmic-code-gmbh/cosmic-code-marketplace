@@ -2,12 +2,14 @@
 // A viewed done agent stays in Done until left. A space with its own icon
 // (shared "space.icons", set in spaces-icons) shows that icon instead of its name;
 // one without shows its colored letter, as in the Spaces list. Under an agent also
-// run what Herdr doesn't know as terminals: its Codex runs and Claude subagents (hidden.js).
+// run what Herdr doesn't know as terminals: its Bash-tool runs (background tasks,
+// listeners), Codex runs and Claude subagents (hidden.js). A space's generic icon
+// (shared "space.glyphs") stands in for the letter.
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, watchFolder, exec, knownAgents } from "herdr";
-import { codexRuns, claudeSubagents, subagentDir } from "./hidden.js";
+import { cliRuns, claudeSubagents, subagentDir } from "./hidden.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -119,36 +121,50 @@ export default class Agents extends View {
     cx.timer.every(30000, (cx) => cx.notify());
     // terminal -> its hidden helpers, shown as sub-rows (see tree()).
     this.hidden = {};
-    this.codex = [];
+    this.runs = [];
     this.subs = [];
-    cx.timer.every(3000, (cx) => this.scanCodex(cx));
-    this.scanCodex(cx);
+    // Processes have no event to wait for: looked at every 3 s. The subagent files
+    // wake the list at once, and the same look every 3 s catches a change that came
+    // between reading the folder and watching it again (or a watch that failed).
+    cx.timer.every(3000, (cx) => { this.scanRuns(cx); this.scanSubs(cx); });
+    this.scanRuns(cx);
     cx.spawn(async (cx) => {
       // fs may write only under the app home; the hook's folder is made by mkdir.
       await exec("mkdir", ["-p", subagentDir()]).catch(() => {});
       for (;;) {
-        this.subs = await claudeSubagents(Date.now());
-        this.regroup();
-        cx.notify();
-        try { await watchFolder(subagentDir()); } catch { return; }
+        await this.scanSubs(cx);
+        try { await watchFolder(subagentDir()); } catch { await new Promise((r) => cx.timer.after(3000, r)); }
       }
     });
   }
 
-  scanCodex(cx) {
+  scanRuns(cx) {
+    if (this.scanningRuns) return;
+    this.scanningRuns = true;
     cx.spawn(async (cx) => {
-      const runs = await codexRuns(Date.now()).catch(() => []);
-      const same = JSON.stringify(runs.map((r) => r.id)) === JSON.stringify(this.codex.map((r) => r.id));
-      this.codex = runs;
-      if (same) return;
-      this.regroup();
-      cx.notify();
+      const runs = await cliRuns(Date.now()).catch(() => this.runs);
+      this.scanningRuns = false;
+      if (this.update("runs", runs)) cx.notify();
     });
+  }
+
+  async scanSubs(cx) {
+    const subs = await claudeSubagents(Date.now()).catch(() => this.subs);
+    if (this.update("subs", subs)) cx.notify();
+  }
+
+  // Keeps a new helper list; true when it shows something else than before.
+  update(key, list) {
+    const ids = (l) => JSON.stringify(l.map((h) => [h.id, h.name]));
+    const changed = ids(list) !== ids(this[key]);
+    this[key] = list;
+    if (changed) this.regroup();
+    return changed;
   }
 
   regroup() {
     this.hidden = {};
-    for (const h of [...this.subs, ...this.codex]) (this.hidden[h.terminal] ??= []).push(h);
+    for (const h of [...this.subs, ...this.runs]) (this.hidden[h.terminal] ??= []).push(h);
   }
 
   // Stamps agents whose state changed. Done and idle count as one: looking at a
@@ -300,7 +316,7 @@ export default class Agents extends View {
     // Hidden helpers look like sub-agents that are working; a click shows their agent.
     const hidden = (this.hidden?.[addr] ?? []).map((h) => ({
       address: `${addr}:${h.id}`, name: h.name, status: "working", since: h.since, owner: addr,
-      program: { icon: h.kind === "codex" ? "icons/codex.svg" : "icons/claude.svg" },
+      program: h.kind === "bash" ? { icon: "icons/shell.svg", tint: true } : { icon: h.kind === "codex" ? "icons/codex.svg" : "icons/claude.svg" },
     }));
     const kids = [...all.filter((k) => k.parent === addr && k.state === "live"), ...hidden];
     return kids.flatMap((k, i) => {
@@ -452,12 +468,17 @@ export default class Agents extends View {
 
     const spaceIcons = shared("space.icons") ?? {};
     const spaceColors = shared("space.colors") ?? {};
-    // The space's app icon, else its colored letter.
+    const spaceGlyphs = shared("space.glyphs") ?? {};
+    // The space's picture, else its generic icon or letter on its color (as spaces-icons draws it).
     const spacePic = (a, size) => {
       if (spaceIcons[a.space]) return image(spaceIcons[a.space]).w(size).h(size).flex_none().rounded(4);
       const c = spaceColors[a.space] ?? "ansi6";
+      // Only our duotone set (duo-*); an earlier icon name falls back to the letter.
+      const glyph = /^duo-/.test(spaceGlyphs[a.space] ?? "") ? spaceGlyphs[a.space] : null;
       return h_flex().size(size).flex_none().rounded(4).bg(c.startsWith("#") ? c : (MARK[c] ?? t[c])).items_center().justify_center()
-        .text_size(size * 0.58).font_bold().text_color("#ffffff").child([...(a.space_name || "?")][0].toUpperCase());
+        .child(glyph
+          ? svg(`mods/spaces-icons/glyphs/${glyph}.svg`).size(Math.round(size * 0.8)).text_color("#ffffff")
+          : div().text_size(size * 0.58).font_bold().text_color("#ffffff").child([...(a.space_name || "?")][0].toUpperCase()));
     };
 
     const row = (a, i, subs = []) => {

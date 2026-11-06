@@ -1,8 +1,12 @@
 // Helpers an agent runs that Herdr doesn't see as terminals, by the terminal they
-// belong to (its HC_TERMINAL_ID): Codex runs started from Claude's Bash tool (a
-// sol loop, say) and Claude Code subagents (the herdr plugin's hooks/subagents.ts
-// keeps one JSON file per running subagent in SUBAGENTS).
-// Each item: { id, name, kind: "codex" | "claude", since (ms) }.
+// belong to (its HC_TERMINAL_ID):
+// - everything a Claude Code CLI runs through its Bash tool right now: background
+//   tasks, Monitor listeners, long commands, and Codex runs among them (a sol loop),
+//   found as children of the claude process (cliRuns);
+// - Codex runs started anywhere else in a Herdr terminal (also cliRuns);
+// - Claude Code subagents, which run inside the claude process: the herdr plugin's
+//   hooks/subagents.ts keeps one JSON file per running subagent in subagentDir().
+// Each item: { terminal, id, name, kind: "codex" | "claude" | "bash", since (ms) }.
 
 import { exec, home, readTextFile } from "herdr";
 import * as fs from "fs/promises";
@@ -11,6 +15,9 @@ export const subagentDir = () => `${home()}/.local/state/herdr-subagents`;
 
 // A subagent whose Stop never came (Claude killed) stops counting after this.
 const STALE = 6 * 3600000;
+// Bash calls younger than this are left out: most end before the next look, and
+// showing them would only make rows flicker.
+const MIN_AGE = 2000;
 
 // ps's elapsed time, "[[dd-]hh:]mm:ss", in ms.
 /** @param {string} s */
@@ -21,36 +28,95 @@ function elapsed(s) {
   return ((Number(d) * 24 + parts[0]) * 3600 + parts[1] * 60 + parts[2]) * 1000;
 }
 
-// Running `codex exec` processes with the terminal they were started from.
-// The outermost codex of a chain counts once; a codex without HC_TERMINAL_ID
-// (the Codex app, a shell outside Herdr) is left out.
-/** @param {number} now */
-export async function codexRuns(now) {
-  const found = await exec("pgrep", ["-x", "codex"]);
-  const pids = found.stdout.split("\n").filter(Boolean);
-  if (!pids.length) return [];
-  const r = await exec("ps", ["-E", "-ww", "-o", "pid=,ppid=,etime=,command=", "-p", pids.join(",")]);
-  const procs = r.stdout.split("\n").filter(Boolean).map((line) => {
+/** @typedef {{ pid: string, ppid: string, etime: string, command: string }} Proc */
+
+/** @param {string} out @returns {Proc[]} */
+function parsePs(out) {
+  return out.split("\n").filter(Boolean).map((line) => {
     const [, pid, ppid, etime, command] = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/.exec(line) ?? [];
     return { pid, ppid, etime, command: command ?? "" };
-  }).filter((p) => p.pid && / exec( |$)/.test(p.command));
-  const mine = new Set(procs.map((p) => p.pid));
-  const runs = procs.filter((p) => !mine.has(p.ppid));
-  if (!runs.length) return [];
-  // The parent says what it is for: scripts/sol is a Sol review.
-  const parents = await exec("ps", ["-ww", "-o", "pid=,command=", "-p", runs.map((p) => p.ppid).join(",")]);
-  const parentOf = Object.fromEntries(parents.stdout.split("\n").filter(Boolean).map((l) => {
-    const [, pid, cmd] = /^\s*(\d+)\s+(.*)$/.exec(l) ?? [];
-    return [pid, cmd ?? ""];
-  }));
-  return runs.flatMap((p) => {
-    const terminal = /\bHC_TERMINAL_ID=(\S+)/.exec(p.command)?.[1];
-    if (!terminal) return [];
-    const sol = /\/sol(\s|$)/.test(parentOf[p.ppid] ?? "");
-    const resume = / exec resume /.test(p.command);
-    const name = `${sol ? "Sol" : "Codex"}${resume ? " · Folgerunde" : ""}`;
-    return [{ terminal, id: `codex-${p.pid}`, name, kind: "codex", since: now - elapsed(p.etime) }];
-  });
+  }).filter((p) => p.pid);
+}
+
+/** @param {string} command */
+const program = (command) => command.split(" ")[0].split("/").pop();
+/** @param {{ command: string }} p */
+const isClaude = (p) => program(p.command) === "claude";
+/** @param {{ command: string }} p */
+const isCodexExec = (p) => program(p.command) === "codex" && / exec( |$)/.test(p.command);
+// Claude's Bash tool runs each command as `zsh -c source …/shell-snapshots/… && eval '<command>' …`.
+/** @param {Proc} p */
+const isBashTool = (p) => /\/shell-snapshots\/snapshot-/.test(p.command);
+
+// The command Claude asked for, from its Bash wrapper: first line, without a leading `cd … &&`.
+/** @param {string} wrapper */
+function bashCommand(wrapper) {
+  const quoted = / eval '([\s\S]*)' < \/dev\/null && pwd -P/.exec(wrapper)?.[1];
+  if (!quoted) return "Bash";
+  const text = quoted.replace(/\\012/g, "\n").replace(/'"'"'/g, "'");
+  const line = text.split("\n").map((l) => l.trim()).find(Boolean) ?? "Bash";
+  const short = line.replace(/^cd\s+\S+\s*&&\s*/, "");
+  return short.length > 80 ? `${short.slice(0, 79)}…` : short;
+}
+
+// A codex run's name: Sol when scripts/sol started it, a follow-up round when it resumes.
+/** @param {Proc} p @param {string | undefined} parentCommand */
+function codexName(p, parentCommand) {
+  const sol = /\/sol(\s|$)/.test(parentCommand ?? "");
+  return `${sol ? "Sol" : "Codex"}${/ exec resume /.test(p.command) ? " · Folgerunde" : ""}`;
+}
+
+// Bash-tool runs of every claude process in a Herdr terminal (a Codex run among them
+// named as one), and the outermost `codex exec` of chains outside any claude.
+/** @param {number} now */
+export async function cliRuns(now) {
+  const r = await exec("ps", ["-A", "-ww", "-o", "pid=,ppid=,etime=,command="]);
+  const procs = parsePs(r.stdout);
+  const byPid = new Map(procs.map((p) => [p.pid, p]));
+  /** @type {Map<string, Proc[]>} */
+  const kids = new Map();
+  for (const p of procs) {
+    if (!kids.has(p.ppid)) kids.set(p.ppid, []);
+    kids.get(p.ppid)?.push(p);
+  }
+  /** @type {(p: Proc) => Proc[]} */
+  const below = (p) => (kids.get(p.pid) ?? []).flatMap((k) => [k, ...below(k)]);
+
+  const claudes = procs.filter(isClaude);
+  const codexes = procs.filter((p) => isCodexExec(p) && !isCodexExec(byPid.get(p.ppid) ?? { command: "" }));
+  const asked = [...claudes, ...codexes];
+  if (!asked.length) return [];
+  // Which terminal each one runs in: only the HC_TERMINAL_ID of its environment is kept.
+  const envs = await exec("ps", ["-E", "-ww", "-o", "pid=,command=", "-p", asked.map((p) => p.pid).join(",")]);
+  /** @type {Record<string, string>} */
+  const terminalOf = {};
+  for (const line of envs.stdout.split("\n")) {
+    const pid = /^\s*(\d+)\s/.exec(line)?.[1];
+    const terminal = /\bHC_TERMINAL_ID=(\S+)/.exec(line)?.[1];
+    if (pid && terminal) terminalOf[pid] = terminal;
+  }
+
+  const out = [];
+  const covered = new Set(); // codex pids already shown under a claude
+  for (const c of claudes) {
+    const terminal = terminalOf[c.pid];
+    if (!terminal) continue;
+    for (const shell of (kids.get(c.pid) ?? []).filter(isBashTool)) {
+      const age = elapsed(shell.etime);
+      const codex = below(shell).find(isCodexExec);
+      if (codex) covered.add(codex.pid);
+      if (age < MIN_AGE) continue;
+      out.push(codex
+        ? { terminal, id: `codex-${codex.pid}`, name: codexName(codex, byPid.get(codex.ppid)?.command), kind: "codex", since: now - elapsed(codex.etime) }
+        : { terminal, id: `bash-${shell.pid}`, name: bashCommand(shell.command), kind: "bash", since: now - age });
+    }
+  }
+  for (const p of codexes) {
+    const terminal = terminalOf[p.pid];
+    if (!terminal || covered.has(p.pid)) continue;
+    out.push({ terminal, id: `codex-${p.pid}`, name: codexName(p, byPid.get(p.ppid)?.command), kind: "codex", since: now - elapsed(p.etime) });
+  }
+  return out;
 }
 
 // Running Claude Code subagents, from the hook's files.
