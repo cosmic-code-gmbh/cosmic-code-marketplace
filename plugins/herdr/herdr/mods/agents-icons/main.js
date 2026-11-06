@@ -5,11 +5,19 @@
 // run what Herdr doesn't know as terminals: its Bash-tool runs (background tasks,
 // listeners), Codex runs and Claude subagents (hidden.js). A space's generic icon
 // (shared "space.glyphs") stands in for the letter.
+// Sorted "Space, then status", this list is also the space switcher (the main layout
+// has no Spaces list any more): every space gets a card whose header is drawn in the
+// space's color, with a thread of that color down its sections. A click on the header
+// selects the space, its chevron folds it (remembered), "+" starts a terminal or an
+// agent there, right-click opens the space menu, dragging reorders, and an image or
+// .app dropped on it becomes its picture. Its second line is the git state (spacegit.js).
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, watchFolder, exec, knownAgents } from "herdr";
+import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, watchFolder, exec, knownAgents, nextCommand, notify, machines } from "herdr";
 import { cliRuns, claudeSubagents, subagentDir } from "./hidden.js";
+import { SpaceGit, gitLine } from "./spacegit.js";
+import { setIcon, pickIcon } from "./icons.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -111,8 +119,41 @@ export default class Agents extends View {
   init(_props, cx) {
     if (props()?.sortMenu) return;
     if (props()?.newMenu) return this.initNewMenu(cx);
-    // Ids whose fold state differs from their default (see isFolded).
-    this.folded = new Set();
+    // Ids whose fold state differs from their default (see isFolded). Folded space
+    // cards ("sp-<space>") are kept across restarts.
+    this.folded = new Set(JSON.parse(localStorage.getItem("spaceFolds") ?? "[]"));
+    // space -> its tab count at the last render: a new tab unfolds its space.
+    this.tabCounts = null;
+    // Space header drag: the space pressed, and the one the pointer is over.
+    this.pressed = null;
+    this.over = null;
+    this.spaceGit = new SpaceGit();
+    cx.timer.every(1000, (cx) => this.spaceGit.tick(cx));
+    // Commands from popups:
+    // "agents-icons.icon:<id>": "Choose image…" in spaces-icons' popup (the popup's own
+    //   tasks end when it closes). The pick waits in its own task, so the loop keeps
+    //   taking commands, and nothing that fails ends the loop.
+    // "agents-icons.shelf:<agents.followUp|agents.archive>:<on|off>:<terminal>": the
+    //   agent row's right-click menu (menu-icons).
+    cx.spawn(async (cx) => {
+      for (;;) {
+        const c = await nextCommand();
+        const shelfCmd = /^shelf:(agents\.followUp|agents\.archive):(on|off):(.+)$/.exec(c);
+        if (shelfCmd) { setShelf(shelfCmd[1], shelfCmd[3], shelfCmd[2] === "on"); cx.notify(); continue; }
+        const [, id] = /^icon:(.+)$/.exec(c) ?? [];
+        try {
+          const s = id && spaces().find((x) => x.id === id);
+          if (s) cx.spawn(async (cx) => {
+            try {
+              const file = await pickIcon(id, s.name);
+              if (file) await setIcon(id, file);
+            } catch (e) { notify({ title: "Space icon", body: String(e?.message ?? e), level: "error" }); }
+            cx.notify();
+          });
+        } catch (e) { notify({ title: "Space icon", body: String(e?.message ?? e), level: "error" }); }
+        cx.notify();
+      }
+    });
     // Each agent's last state and when it changed (ms), kept across restarts.
     this.changed = JSON.parse(localStorage.getItem("changed") ?? "{}");
     this.pendingPins = JSON.parse(localStorage.getItem("pins") ?? "[]");
@@ -139,11 +180,17 @@ export default class Agents extends View {
   }
 
   scanRuns(cx) {
-    if (this.scanningRuns) return;
-    this.scanningRuns = true;
+    // One look at a time, normally. A cancelled task never finishes (gpui-kit Task),
+    // so its look would block all later ones: after 65 s (cliRuns: two execs of at
+    // most 30 s each) a new look starts anyway. Only the newest look may finish:
+    // an older one that still comes back neither unblocks nor overwrites it.
+    const busy = this.scanningRuns;
+    if (busy && Date.now() - busy.at < 65000) return;
+    const scan = (this.scanningRuns = { at: Date.now() });
     cx.spawn(async (cx) => {
       const runs = await cliRuns(Date.now()).catch(() => this.runs);
-      this.scanningRuns = false;
+      if (this.scanningRuns !== scan) return;
+      this.scanningRuns = null;
       if (this.update("runs", runs)) cx.notify();
     });
   }
@@ -222,7 +269,46 @@ export default class Agents extends View {
   }
 
   toggleFold(id) {
-    this.folded.has(id) ? this.folded.delete(id) : this.folded.add(id);
+    this.setFold(id, !this.folded.has(id));
+  }
+
+  // on: the id differs from its default. Space cards ("sp-<id>", not their sections
+  // "sp-<id>-3" / "sp-<id>:archive") are written through.
+  setFold(id, on) {
+    on ? this.folded.add(id) : this.folded.delete(id);
+    const card = (f) => /^sp-[^:-]+$/.test(f);
+    if (card(id)) localStorage.setItem("spaceFolds", JSON.stringify([...this.folded].filter(card)));
+  }
+
+  // Every space has a color (shared "space.colors"): a new one gets the palette color
+  // used least, a closed one's entry goes. Taken over from spaces-icons' list, which the
+  // main layout no longer shows. Answers the colors.
+  assignColors() {
+    const palette = ["ansi6", "ansi3", "ansi4", "ansi5", "ansi2", "ansi1"];
+    const stored = shared("space.colors") ?? {};
+    const sp = spaces();
+    const ids = new Set(sp.map((s) => s.id));
+    const kept = Object.fromEntries(Object.entries(stored).filter(([id]) => ids.has(id)));
+    let changed = Object.keys(kept).length !== Object.keys(stored).length;
+    for (const s of sp) {
+      if (kept[s.id] || s.name === "~") continue;
+      const uses = (c) => Object.values(kept).filter((v) => v === c).length;
+      kept[s.id] = palette.reduce((best, c) => (uses(c) < uses(best) ? c : best));
+      changed = true;
+    }
+    if (changed) setShared("space.colors", kept);
+    return kept;
+  }
+
+  // A tab that appears in a folded space unfolds it, so what was just started shows.
+  unfoldGrown() {
+    const counts = Object.fromEntries(spaces().map((s) => [s.id, s.tabs.length]));
+    if (this.tabCounts) {
+      for (const [id, n] of Object.entries(counts)) {
+        if (n > (this.tabCounts[id] ?? n) && this.folded.has(`sp-${id}`)) this.setFold(`sp-${id}`, false);
+      }
+    }
+    this.tabCounts = counts;
   }
 
   since(a) {
@@ -307,6 +393,74 @@ export default class Agents extends View {
           .child(this.agentsFailed ? "Could not load agents" : "Checking installed agents…"))));
   }
 
+  // Every pane that runs no agent (shells, editors, dev servers), by space in space
+  // order, each with its tab: space id -> { space, items: [{ p, tab }] }.
+  terminalsBySpace() {
+    const tabSpace = new Map();
+    for (const s of spaces()) for (const tab of s.tabs) tabSpace.set(tab.id, { space: s, tab });
+    const bySpace = new Map();
+    for (const p of panes()) {
+      if (!p.terminal || p.status || p.program?.agent) continue;
+      const at = tabSpace.get(p.tab);
+      if (!at) continue;
+      (bySpace.get(at.space.id) ?? bySpace.set(at.space.id, { space: at.space, items: [] }).get(at.space.id)).items.push({ p, tab: at.tab });
+    }
+    return bySpace;
+  }
+
+  // One terminal: its icon, a name, and grey the folder it's in. A click focuses its pane,
+  // a right-click opens its menu (menu-icons, "terminal").
+  termRow(t, { p, tab }) {
+    const live = clean(p.title);
+    // A named tab says what it is; else a telling title (not a path or user@host); else the program.
+    const telling = live && live !== p.program?.name && !/^[~/]/.test(live) && !live.includes("@");
+    const name = tab.named ? tab.name : telling ? live : p.program?.name || "Terminal";
+    const where = p.cwd ? p.cwd.split("/").filter(Boolean).at(-1) ?? "/" : "";
+    return h_flex().id(`term-${p.pane}`).px(8).h(28).flex_none().gap(9).rounded(8).items_center()
+      .when(p.focused, (el) => el.bg(t.selected))
+      .cursor_pointer().hover((s) => s.bg(t.hover))
+      .on_click(() => run("pane.focus", { pane: p.pane }))
+      .on_mouse_down("right", () => openOverlay({ mod: "menu-icons", kind: "popup", width: 200, height: 160, props: { tab: "terminal", target: { pane: p.pane, tab: tab.id } } }))
+      // The section's blue on the icon: terminals read apart from the agents' program icons.
+      .child(p.program?.tint || !p.program?.icon ? svg(p.program?.icon ?? "icons/shell.svg").size(14).flex_none().text_color(t.ansi4) : icon(p.program, 14))
+      .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(name))
+      .when(Boolean(where) && where !== name, (el) => el.child(div().flex_none().max_w(90).truncate().text_size(11).text_color(t.dim).child(where)));
+  }
+
+  // Sorts without space cards (priority, grouped): the terminals as their own section
+  // under the agents, per space. Folds: "terms" and "terms-<space>"; both start open.
+  terminalRows(t) {
+    const bySpace = this.terminalsBySpace();
+    if (!bySpace.size) return [];
+    const open = !this.isFolded("terms");
+    const head = h_flex().id("terms").px(8).pt(20).h(42).flex_none().gap(6).items_center()
+      .text_size(10).font_family(LABEL_FONT).font_bold().text_color(t.dim)
+      .cursor_pointer().hover((s) => s.text_color(t.foreground))
+      .on_click((_e, cx) => { this.toggleFold("terms"); cx.notify(); })
+      .child(div().child("TERMINALS"))
+      .when(!open, (el) => el.child(div().text_color(t.dim).child(String([...bySpace.values()].reduce((n, g) => n + g.items.length, 0)))))
+      .child(div().flex_1())
+      .when(!open, (el) => el.child(svg("mods/workspace-chrome/chevron-right.svg").size(11).flex_none()));
+    if (!open) return [head];
+    const pic = this.spacePicFor;
+    const out = [head];
+    for (const { space, items } of bySpace.values()) {
+      const id = `terms-${space.id}`;
+      const spOpen = !this.isFolded(id);
+      out.push(h_flex().id(id).px(8).pt(6).h(28).flex_none().gap(6).items_center()
+        .text_size(11).font_medium().text_color(t.muted)
+        .cursor_pointer().hover((s) => s.text_color(t.foreground))
+        .on_click((_e, cx) => { this.toggleFold(id); cx.notify(); })
+        .child(pic({ space: space.id, space_name: space.name }, 14))
+        .child(div().truncate().child(space.name))
+        .when(!spOpen, (el) => el.child(div().text_color(t.dim).child(String(items.length))))
+        .child(div().flex_1())
+        .when(!spOpen, (el) => el.child(svg("mods/workspace-chrome/chevron-right.svg").size(11).flex_none().text_color(t.dim))));
+      if (spOpen) out.push(...items.map((it) => this.termRow(t, it)));
+    }
+    return out;
+  }
+
   peek(addr) {
     run("terminal.peek", { terminal: addr });
   }
@@ -382,6 +536,7 @@ export default class Agents extends View {
     const now = Date.now();
     this.track(list, now);
     this.hold(list);
+    this.unfoldGrown();
     const byPriority = sort.id === "priority";
     const bySpaceStatus = sort.id === "space-status";
     // State sections name the state, so rows can say it more quietly.
@@ -455,7 +610,8 @@ export default class Agents extends View {
     // agent's own title, never an automatic tab number unless two rows would
     // otherwise read the same.
     // Read the pane snapshot once: every host read copies the whole list into JS.
-    const leads = leadPanes(panes());
+    const ps = panes();
+    const leads = leadPanes(ps);
     const tabLabels = new Map(spaces().flatMap(s => s.tabs).map(tab => [tab.id, title(tab, leads.get(tab.id))]));
     const labels = new Map(list.map(a => [a.address, tabLabels.get(a.tab) ?? (a.title || a.program?.name || "")]));
     const label = (a) => labels.get(a.address);
@@ -467,19 +623,26 @@ export default class Agents extends View {
     }
 
     const spaceIcons = shared("space.icons") ?? {};
-    const spaceColors = shared("space.colors") ?? {};
+    const spaceColors = this.assignColors();
     const spaceGlyphs = shared("space.glyphs") ?? {};
     // The space's picture, else its generic icon or letter on its color (as spaces-icons draws it).
+    // A space's color as #rrggbb (stored as a palette name or as hex).
+    const spaceHex = (id) => {
+      const c = spaceColors[id] ?? "ansi6";
+      return (c.startsWith("#") ? c : (MARK[c] ?? t[c] ?? t.accent)).slice(0, 7);
+    };
     const spacePic = (a, size) => {
-      if (spaceIcons[a.space]) return image(spaceIcons[a.space]).w(size).h(size).flex_none().rounded(4);
-      const c = spaceColors[a.space] ?? "ansi6";
+      const radius = Math.round(size * 0.28);
+      if (spaceIcons[a.space]) return image(spaceIcons[a.space]).w(size).h(size).flex_none().rounded(radius);
       // Only our duotone set (duo-*); an earlier icon name falls back to the letter.
       const glyph = /^duo-/.test(spaceGlyphs[a.space] ?? "") ? spaceGlyphs[a.space] : null;
-      return h_flex().size(size).flex_none().rounded(4).bg(c.startsWith("#") ? c : (MARK[c] ?? t[c])).items_center().justify_center()
+      return h_flex().size(size).flex_none().rounded(radius).bg(spaceHex(a.space)).items_center().justify_center()
         .child(glyph
           ? svg(`mods/spaces-icons/glyphs/${glyph}.svg`).size(Math.round(size * 0.8)).text_color("#ffffff")
           : div().text_size(size * 0.58).font_bold().text_color("#ffffff").child([...(a.space_name || "?")][0].toUpperCase()));
     };
+    // terminalRows draws the same space pictures.
+    this.spacePicFor = spacePic;
 
     const row = (a, i, subs = []) => {
       const pic = icon(a.program, 16, t.foreground);
@@ -566,6 +729,8 @@ export default class Agents extends View {
           cx.notify();
         })
         .on_click(() => run("pane.focus", { pane: a.pane }))
+        // Its menu (menu-icons, "agent"): rename, pin, Follow up, Archive, close.
+        .on_mouse_down("right", () => openOverlay({ mod: "menu-icons", kind: "popup", width: 210, height: 200, props: { tab: "agent", target: { terminal: a.address, pane: a.pane, tab: a.tab } } }))
         .when(Boolean(sp), el => el.child(div().id(`agent-space-${a.address}`).tooltip(a.space_name || "").child(sp)))
         .when(Boolean(pic), el => el.child(div().id(`agent-fold-${a.address}`)
           .when(subs.length > 0, el => el.on_click((_e, cx) => {
@@ -592,13 +757,31 @@ export default class Agents extends View {
         const sp = `sp-${a.space}`;
         const space = groups.findLast((g) => g.id === sp);
         if (space) space.members.push(a);
-        else groups.push({ id: sp, label: a.space_name || "", status: null, members: [a], pic: spacePic(a, 16), headerOnly: true, space: a.space });
+        else groups.push({ id: sp, label: a.space_name || "", status: null, members: [a], headerOnly: true, space: a.space });
         const r = rankOf(a) || RANK.idle;
         const sec = marked.has(a.address) ? { id: `${sp}:followup`, label: "Follow up", status: null, color: t.ansi5 }
           : shelved.has(a.address) ? { id: `${sp}:archive`, label: "Archive", status: null }
           : { id: `${sp}-${r}`, label: SECTION[r], status: SECTION_STATUS[r] };
         if (groups.at(-1)?.id === sec.id) groups.at(-1).members.push(a);
         else groups.push({ ...sec, members: [a], parent: sp });
+      }
+      // Each space's terminals as the first section in its card, above Follow up.
+      // Every space gets a card, in space order: the headers are the space switcher.
+      const terms = this.terminalsBySpace();
+      for (const s of spaces()) {
+        if (!groups.some((g) => g.id === `sp-${s.id}`)) {
+          groups.push({ id: `sp-${s.id}`, label: s.name, status: null, members: [], headerOnly: true, space: s.id });
+        }
+      }
+      const order = new Map(spaces().map((s, i) => [`sp-${s.id}`, i]));
+      const at = (g) => (g.id === "pinned" ? -1 : order.get(g.parent ?? g.id) ?? Infinity);
+      // Stable: within a space, header and sections keep their order.
+      const sorted = groups.map((g, i) => [g, i]).sort(([x, i], [y, j]) => at(x) - at(y) || i - j).map(([g]) => g);
+      groups.length = 0;
+      for (const g of sorted) {
+        groups.push(g);
+        const items = g.headerOnly && terms.get(g.space)?.items;
+        if (items) groups.push({ id: `${g.id}:terms`, label: "Terminals", status: null, color: t.ansi4, members: items, parent: g.id, terms: true });
       }
     }
     if (!bySpaceStatus && later.length) groups.push({ id: "follow-up", label: "Follow up", status: null, color: t.ansi5, members: later });
@@ -610,47 +793,133 @@ export default class Agents extends View {
     }
     if (!bySpaceStatus && archived.length) groups.push({ id: "archive", label: "Archive", status: null, members: archived });
 
-    // A group's header; it folds the group. Folded, it says how many and the most urgent state.
-    // A folded space's split chip: one segment per section that has agents, its count
-    // in the section's color (Follow up, Needs you, Done, Working, Idle; not Archive).
-    const splitChip = (g) => {
-      const counts = new Map();
-      for (const a of g.members) {
-        if (shelved.has(a.address)) continue;
-        const key = marked.has(a.address) ? "followup" : SECTION_STATUS[rankOf(a) || RANK.idle] ?? "idle";
-        counts.set(key, (counts.get(key) ?? 0) + 1);
-      }
-      const order = [["followup", t.ansi5, "Follow up"], ["blocked", t.blocked, "Needs you"], ["done", t.done, "Done"], ["working", t.working, "Working"], ["idle", t.idle ?? t.dim, "Idle"]];
-      const parts = order.filter(([k]) => counts.has(k));
-      if (!parts.length) return null;
-      return h_flex().id(`split-${g.id}`).flex_none().h(18).rounded(5).overflow_hidden().gap(1)
-        .tooltip(parts.map(([k, , label]) => `${counts.get(k)} ${label}`).join(" · "))
-        .children(parts.map(([k, color]) => h_flex().h_full().px(6).items_center()
-          // Grey reads faint at the others' strength, so Idle gets a stronger tint.
-          .bg(color + (k === "idle" ? "8c" : "2e")).text_size(10.5).font_semibold().text_color(k === "idle" ? t.foreground : color).child(String(counts.get(k)))));
+    const spaceById = new Map(spaces().map((s) => [s.id, s]));
+    // Other machines whose layout is readable: connected. Their spaces lead the list.
+    const connected = machines().filter((m) => m.name && m.layout === "ready").map((m) => m.name).sort();
+    const machineOf = (id) => spaceById.get(id)?.machine ?? null;
+    // A connected machine's label above its spaces, with "+" for a new space there.
+    const machineHead = (m, i) => h_flex().id(`machine-${m}`).h(26).mt(i ? 14 : 2).flex_none().px(8).gap(7).items_center()
+      .text_size(11).text_color(t.dim)
+      .child(svg("mods/workspace-chrome/server.svg").size(13).flex_none())
+      .child(div().flex_1().truncate().child(m))
+      .child(div().size(6).rounded(3).flex_none().bg(t.ansi2))
+      .child(div().id(`machine-new-${m}`).flex_none().size(20).rounded(5).flex().items_center().justify_center()
+        .hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip(`New space on ${m}`)
+        .on_click(() => run("space.new", { machine: m }))
+        .child(svg("mods/workspace-chrome/plus.svg").size(12)));
+    const activeSpace = spaces().find((s) => s.active)?.id;
+    const newIn = (id, name) => openOverlay({ mod: "agents-icons", kind: "popup", width: 250, height: 420, props: { newMenu: true, space: id, spaceName: name } });
+
+    // A space card's header (by space and status): picture, name and git line on the
+    // space's color, which fades out to the right. Click selects, drag reorders, the
+    // chevron folds; folded, one quiet mark for the most urgent agent inside, no counts.
+    const spaceHeader = (g) => {
+      const s = spaceById.get(g.space);
+      const on = g.space === activeSpace;
+      const open = !this.isFolded(g.id);
+      const hex = spaceHex(g.space);
+      const git = s ? gitLine(this.spaceGit.of(s, ps), g.label) : null;
+      const where = [s?.machine, git?.text].filter(Boolean).join(" · ");
+      const top = open ? 0 : g.members.filter((a) => !shelved.has(a.address)).reduce((m, a) => Math.max(m, rankOf(a) || 0), 0);
+      // The selected space is a solid card in its color. The others fade out to the right:
+      // elements take no gradient fill, so in steps, strongest behind the picture. The first
+      // step is wider than the corner radius, or the rounding is cut to its width.
+      const STEPS = 32, from = 0.34, reach = 0.85;
+      const tint = (a) => hex + Math.round(Math.max(0, a) * 255).toString(16).padStart(2, "0");
+      // Text in the space's color, lifted toward white so it reads on the tinted card.
+      const lift = (k) => "#" + [1, 3, 5].map((i) => Math.round(parseInt(hex.slice(i, i + 2), 16) * (1 - k) + 255 * k).toString(16).padStart(2, "0")).join("");
+      const band = on ? null : h_flex().absolute().top(0).left(0).size_full()
+        .child(div().w(22).flex_none().h_full().rounded_l(11).bg(tint(from)))
+        .children(Array.from({ length: STEPS }, (_, i) => div().flex_1().h_full()
+          .when(i === STEPS - 1, (el) => el.rounded_r(11))
+          .bg(tint(from * (1 - (i + 0.5) / STEPS / reach)))));
+      const order = spaces().map((x) => x.id);
+      const dragging = this.pressed !== null && this.pressed !== g.space;
+      const btn = (id, tip, icon, onClick) => div().id(id).flex_none().size(24).rounded(6)
+        .flex().items_center().justify_center().text_color(t.muted).cursor_pointer()
+        .hover((st) => st.bg(t.foreground + "1f").text_color(t.foreground))
+        .tooltip(tip)
+        .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+        .on_click((_e, cx) => { cx.stop_propagation(); onClick(cx); })
+        .child(svg(icon).size(14));
+      return h_flex()
+        .id(g.id)
+        .relative()
+        .h(40)
+        .flex_none()
+        .pl(7)
+        .pr(4)
+        .gap(9)
+        .items_center()
+        .rounded(11)
+        .cursor_pointer()
+        .when(this.pressed === g.space && this.over !== g.space, (el) => el.opacity(0.5))
+        .on_hover((hovered, cx) => {
+          if (hovered) this.hoveredHeader = g.id;
+          else if (this.hoveredHeader === g.id) this.hoveredHeader = null;
+          cx.notify();
+        })
+        .on_mouse_down("left", () => { this.pressed = g.space; this.over = g.space; })
+        .on_mouse_move((_e, cx) => {
+          const from = spaceById.get(this.pressed);
+          const over = from && (from.machine ?? null) === (s?.machine ?? null) ? g.space : null;
+          if (this.pressed !== null && this.over !== over) { this.over = over; cx.notify(); }
+        })
+        .on_mouse_up("left", (_e, cx) => {
+          const from = this.pressed, over = this.over;
+          this.pressed = null;
+          this.over = null;
+          if (from !== null && over === g.space && from !== g.space) run("space.move", { id: from, index: order.indexOf(g.space) + 1 });
+          else if (from === g.space) run("space.select", { id: g.space });
+          cx.notify();
+        })
+        // The same space menu as before (rename, icon & color, worktrees, close).
+        .on_mouse_down("right", () => openOverlay({ mod: "menu-icons", kind: "popup", width: 200, height: 260, props: { tab: "space", target: { id: g.space } } }))
+        .on_drop((e, cx) => {
+          const file = e.paths?.[0];
+          if (file) cx.spawn(async (cx) => {
+            try { await setIcon(g.space, file); }
+            catch (err) { notify({ title: "Space icon", body: String(err?.message ?? err), level: "error" }); }
+            cx.notify();
+          });
+        })
+        .when(on, (el) => el.bg(tint(0.55)))
+        .when(!on, (el) => el.child(band))
+        .when(dragging && this.over === g.space, (el) => el.child(div().absolute().left(0).right(0).h(2).bg(t.accent)
+          .when(order.indexOf(this.pressed) < order.indexOf(g.space), (line) => line.bottom(0))
+          .when(order.indexOf(this.pressed) > order.indexOf(g.space), (line) => line.top(0))))
+        .child(spacePic({ space: g.space, space_name: g.label }, 26))
+        // Tight lines: the default line height spreads name and git line apart.
+        .child(v_flex().flex_1().min_w(0)
+          .child(div().truncate().text_size(14.5).line_height(1.1).font_semibold().text_color(lift(0.78)).child(g.label))
+          .when(Boolean(where) || git?.ahead > 0 || git?.behind > 0, (el) => el.child(h_flex().min_w(0).gap(5).items_center().text_size(11).line_height(1.15).text_color(lift(0.4) + "d9")
+            .when(Boolean(where), (el) => el.child(div().min_w(0).truncate().child(where)))
+            .when(git?.ahead > 0, (el) => el.child(div().flex_none().text_color(t.ansi2).child(`↑${git.ahead}`)))
+            .when(git?.behind > 0, (el) => el.child(div().flex_none().text_color(t.ansi1).child(`↓${git.behind}`))))))
+        .when(top >= RANK.working, (el) => el.child(div().flex_none().mr(2).child(this.status(t, { status: SECTION_STATUS[top] }, true))))
+        .when(this.hoveredHeader === g.id, (el) => el.child(btn(`new-${g.id}`, `New terminal or agent in ${g.label}`, "mods/workspace-chrome/plus.svg", () => newIn(g.space, g.label))))
+        .child(btn(`fold-${g.id}`, open ? "Fold" : "Unfold", `mods/workspace-chrome/chevron-${open ? "down" : "right"}.svg`, (cx) => { this.toggleFold(g.id); cx.notify(); }));
     };
 
-    // A group's header; it folds the group. Folded, it says how many and the most urgent state;
-    // a folded space by space and status shows its split chip instead.
-    // The space's own header reads as the title and its sections as small labels under it.
+    // A group's header; it folds the group. Folded, it says how many and the most urgent state.
+    // Inside a space card the sections read as small labels.
     const header = (g) => {
       const open = !this.isFolded(g.id);
       const top = g.members.reduce((m, a) => ((RANK[a.status] ?? 0) > (RANK[m] ?? 0) ? a.status : m), null);
-      const title = bySpaceStatus && g.headerOnly;
-      // Room above: a card title or a section in a card little, other groups more (not the first).
-      const gap = title ? 6 : g.parent ? 8 : groups[0] === g ? 8 : 20;
+      // Room above: a section in a card little, other groups more (not the first).
+      const gap = g.parent ? 8 : groups[0] === g ? 8 : 20;
       return h_flex()
         .id(g.id)
         .px(8)
         .pt(gap)
-        .h((title ? 26 : 22) + gap)
+        .h(22 + gap)
         .flex_none()
-        .gap(title ? 8 : 6)
+        .gap(6)
         .items_center()
         // State and shelf names read as small uppercase labels; space names keep their case.
-        .text_size(title ? 12.5 : g.pic ? 11 : 10)
-        .when(title || !g.pic, (el) => el.font_semibold())
-        .when(!title && Boolean(g.pic), (el) => el.font_medium())
+        .text_size(g.pic ? 11 : 10)
+        .when(!g.pic, (el) => el.font_semibold())
+        .when(Boolean(g.pic), (el) => el.font_medium())
         .cursor_pointer()
         .hover((s) => s.text_color(t.foreground))
         .on_click((_e, cx) => {
@@ -664,7 +933,7 @@ export default class Agents extends View {
           cx.notify();
         }))
         .when(Boolean(g.pic), (el) => el.child(g.pic))
-        .child(div().truncate().when(!title && !g.pic, (el) => el.font_family(LABEL_FONT).font_bold()).when(title, (el) => el.font_semibold()).text_color(title ? t.foreground : g.color ?? (g.status === "idle" ? t.muted : t[g.status]) ?? t.dim).child(g.pic ? g.label : g.label.toUpperCase()))
+        .child(div().truncate().when(!g.pic, (el) => el.font_family(LABEL_FONT).font_bold()).text_color(g.color ?? (g.status === "idle" ? t.muted : t[g.status]) ?? t.dim).child(g.pic ? g.label : g.label.toUpperCase()))
         .when(Boolean(g.space) && this.hoveredHeader === g.id, (el) => el.child(div()
           .id(`new-${g.id}`)
           .flex_none()
@@ -677,82 +946,97 @@ export default class Agents extends View {
           .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
           .on_click((_e, cx) => {
             cx.stop_propagation();
-            openOverlay({ mod: "agents-icons", kind: "popup", width: 250, height: 420, props: { newMenu: true, space: g.space, spaceName: g.label } });
+            newIn(g.space, g.label);
           })
           .child(svg("mods/workspace-chrome/plus.svg").size(13))))
-        .when(!open && !title, (el) => el.child(div().text_color(t.dim).child(String(g.members.length))))
+        .when(!open, (el) => el.child(div().text_color(t.dim).child(String(g.members.length))))
         .child(div().flex_1())
-        .when(!open && title, (el) => el.when(Boolean(splitChip(g)), (el) => el.child(splitChip(g))))
         .when(!open, (el) => el
-          .when(!title && (Boolean(g.pic) || g.id === "archive" || g.id.endsWith(":archive")) && top && top !== "idle", (el) => el.child(this.status(t, { status: top }, true)))
+          .when((Boolean(g.pic) || g.id === "archive" || g.id.endsWith(":archive")) && top && top !== "idle", (el) => el.child(this.status(t, { status: top }, true)))
           .child(svg("mods/workspace-chrome/chevron-right.svg").size(11).flex_none().text_color(t.dim)));
     };
     const groupRows = (g) => {
       if (g.parent && this.isFolded(g.parent)) return [];
-      if (g.headerOnly) return [header(g)];
-      return [header(g), ...(this.isFolded(g.id) ? [] : g.members.flatMap(withKids))];
+      if (g.headerOnly) return [spaceHeader(g)];
+      if (this.isFolded(g.id)) return [header(g)];
+      return [header(g), ...(g.terms ? g.members.map((it) => this.termRow(t, it)) : g.members.flatMap(withKids))];
     };
-    // By space and status: the space's icon and name, then its sections indented
-    // to the right of a thin line that runs down from under the icon.
+    // By space and status: the space's header, then its sections indented to the right
+    // of a thread in the space's color that runs down from under its picture.
     const cards = () => {
       const out = [];
       let card = null;
       for (const g of groups) {
         if (g.headerOnly) {
-          out.push((card = { card: true, id: g.id, head: groupRows(g), items: [] }));
+          out.push((card = { card: true, id: g.id, space: g.space, head: groupRows(g), items: [] }));
           continue;
         }
         const rowsOf = groupRows(g);
         if (card && g.parent === card.id) card.items.push(...rowsOf);
         else out.push(...rowsOf);
       }
-      return out.map((c, i) => (c.card === true
-        ? v_flex().id(`space-${c.id}`).flex_none().mt(i ? 14 : 2)
+      // Other machines' spaces go to the very top, under their machine's name, and only
+      // while it is connected; this computer's spaces keep their place after Pinned.
+      const remote = (c) => c.card === true && Boolean(machineOf(c.space));
+      const top = connected.flatMap((m) => [m, ...out.filter((c) => remote(c) && machineOf(c.space) === m)]);
+      const shown = [...top, ...out.filter((c) => !remote(c))];
+      return shown.map((c, i) => (typeof c === "string"
+        ? machineHead(c, i)
+        : c.card === true
+        ? v_flex().id(`space-${c.id}`).flex_none().mt(i && typeof shown[i - 1] !== "string" ? 12 : 2)
           .children(c.head)
           .when(c.items.length > 0, (el) => el.child(
-            // The icon is 16 px wide at 8 px in: the line runs under its middle, and the
-            // indent puts section labels and agent icons flush with the space name (32 px).
-            v_flex().flex_none().ml(15).pl(7.5).border_l(1.5).border_color(t.input).children(c.items)))
+            // The picture is 26 px wide at 10 px in: the 2 px thread runs under its middle.
+            v_flex().flex_none().ml(19).pl(9).pt(2).border_l(2)
+              .border_color(spaceHex(c.space) + (c.space === activeSpace ? "bf" : "73")).children(c.items)))
         : c));
     };
+    // The rail: the spaces first (their picture, else their number), then the agents.
+    // Another machine's spaces only while it is connected, and first.
+    const railOrder = [...spaces().filter((s) => connected.includes(s.machine)), ...spaces().filter((s) => !s.machine)];
+    const railSpaces = () => railOrder.map((s, i) => h_flex().id(`rail-${s.id}`).h(28).flex_none().justify_center().items_center()
+      .when(s.id === activeSpace, (el) => el.bg(t.raised))
+      .hover((st) => st.bg(t.hover))
+      .tooltip(s.name)
+      .on_click(() => run("space.select", { id: s.id }))
+      .child(spacePic({ space: s.id, space_name: s.name }, 18)))
+      .concat(railOrder.length ? [div().h(1).mx(8).my(4).flex_none().bg(t.border)] : []);
     const rows = collapsed
-      ? list.flatMap(withKids)
-      : bySpaceStatus ? cards() : groups.flatMap(groupRows);
+      ? [...railSpaces(), ...list.flatMap(withKids)]
+      : bySpaceStatus ? cards() : [...groups.flatMap(groupRows), ...this.terminalRows(t)];
+    const topBtn = (id, tip, icon, onClick) => div().id(id).size(24).flex_none().flex().items_center().justify_center().rounded(6)
+      .text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground))
+      .tooltip(tip).on_click(onClick).child(svg(icon).size(14));
 
     return v_flex()
       .size_full()
       .min_h(0)
       .bg(t.chrome)
-      .border_t(1)
-      .border_color(t.border)
       .text_size(13)
       .when(!collapsed, (el) =>
         el.child(
           h_flex()
-            .px(16)
-            .h(41)
-            .pt(14)
-            .pb(5)
+            .pl(16)
+            .pr(10)
+            .h(34)
             .flex_none()
+            .gap(2)
             .items_center()
-            .justify_between()
-            .child(div().text_size(11.5).font_medium().text_color(t.dim).child("Agents"))
-            .child(
-              div()
-                .id("ag-sort")
-                .text_size(11)
-                .text_color(t.dim)
-                .hover((s) => s.text_color(t.foreground))
-                .on_click(() => openOverlay({ mod: "agents-icons", kind: "popup", width: 200, height: 175, props: { sortMenu: true } }))
-                .tooltip(`Sort agents: ${sort.label}`)
-                .child(svg(`mods/workspace-chrome/${sort.icon}.svg`).size(14)),
-            ),
+            .text_size(11.5)
+            .text_color(t.dim)
+            .child(div().flex_1().child(bySpaceStatus ? "Spaces" : "Agents"))
+            .child(topBtn("ag-sort", `Sort agents: ${sort.label}`, `mods/workspace-chrome/${sort.icon}.svg`,
+              () => openOverlay({ mod: "agents-icons", kind: "popup", width: 200, height: 175, props: { sortMenu: true } })))
+            .child(topBtn("space-new", "New space", "mods/workspace-chrome/plus.svg", () => run("space.new"))),
         ),
       )
-      .when(list.length === 0 && !collapsed, (el) =>
+      .when(list.length === 0 && !collapsed && rows.length === 0, (el) =>
         el.child(div().px(12).text_size(12).text_color(t.dim).child("No agent status yet. Agents show up here when they report their status. Older versions and agents inside tmux may not.")),
       )
-      .child(v_flex().id("ag-list").flex_1().min_h(0).px(collapsed ? 0 : 8).overflow_y_scrollbar().mode("always").children(rows))
+      .child(v_flex().id("ag-list").flex_1().min_h(0).px(collapsed ? 0 : 8).pb(14).overflow_y_scrollbar().mode("always")
+        // A drag that ends outside a space header drops nothing.
+        .on_mouse_up("left", (_e, cx) => { if (this.pressed !== null) { this.pressed = null; this.over = null; cx.notify(); } })
+        .children(rows))
       .when(collapsed, (el) =>
         el.child(
           h_flex()

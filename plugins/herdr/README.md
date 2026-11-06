@@ -8,9 +8,10 @@ Claude Code                                Herdr app (~/.config/herdr-app)
 plugin herdr                               mods/tabs-run      top bar: tabs fold, sound mute, "Artefakte ▾", Fokus
   hooks/bridge.ts ── every Artifact ──┐    mods/artifacts     the dropdown
   (PostToolUse)      publish          │    mods/fokus         the Fokus sidebar (see below)
-                                      │    mods/spaces-icons  Spaces sidebar with app icons per space
-                                      │    mods/agents-icons  Agents list: space icons, helpers, shelves
-                                      │    mods/menu-icons    space menu: Icon & color…
+                                      │    mods/agents-icons  sidebar: space headers, agents, terminals,
+                                      │                       helpers, shelves
+                                      │    mods/spaces-icons  the Icon & color… popup
+                                      │    mods/menu-icons    right-click menus (space, agent, terminal)
                                       │    mods/session-bar-icons  bottom bar: Claude left, git right
                                       │    mods/workspace-chrome-icons  sidebar footer without its line
                                       │    layouts/main-filetree.json
@@ -62,18 +63,21 @@ of this plugin) stays silent while it exists; a red crossed-out speaker shows it
 Each space has an avatar: its own picture, else a duotone icon or its first letter, white on
 the space's color. Right-click the space → **Icon & color…** opens a popup with 12 colors,
 16 duotone coding icons (terminal, braces, branch, rocket, database, …) and **Choose image…**
-(an image or a `.app`); dropping an image or `.app` on the row works too. A picture wins over
-an icon; picking an icon removes the picture.
+(an image or a `.app`); dropping an image or `.app` on the space header works too. A picture
+wins over an icon; picking an icon removes the picture. A new space gets the palette color used
+least.
 
 ```
-shared space.colors  { spaceId: "ansi6" | "#hex" }      mods/spaces-icons (popup + sidebar)
+shared space.colors  { spaceId: "ansi6" | "#hex" }      mods/spaces-icons (popup), agents-icons
 shared space.glyphs  { spaceId: "duo-rocket" }          glyphs/duo-*.svg: outline + 35 % fill,
 shared space.icons   { spaceId: "space-icons/x.png" }     both currentColor
 ```
 
 Pictures are stored as 128 px PNGs in `~/.config/herdr-app/space-icons/`. The Agents list shows
 the same avatar next to the agent's icon where no space header names the space. The three mods are clones of Herdr's `spaces`, `agents` and `menu` (Herdr replaces
-shipped mods on start), and the layout points at them.
+shipped mods on start). The layout shows only agents-icons in the sidebar: the space headers
+there replace the Spaces list, so "Choose image…" in the popup is carried out by agents-icons
+(`agents-icons.icon:<id>`; commands reach shown mods only).
 
 ## Helpers under each agent
 
@@ -112,15 +116,30 @@ An agent sits on one shelf at most, and a shelf wins over a pin. Addresses whose
 ended drop off. Section names are small uppercase labels in their state's color.
 
 **Sort "Space, then status"** (third entry in the sort menu, next to Priority and Grouped by
-space): each space with its own sections, indented behind a grey line; Pinned stays on top.
+space) is also the space switcher: every space is a card, other machines' spaces first while
+they are connected, then Pinned, then this computer's spaces.
 
 ```
-ⓟ published                       folded:  ⓟ published  [3|1|3] ›
-│  FOLLOW UP                                one segment per section, its count in its color
-│  ▣ Google-Drive-Import …                  (Follow up, Needs you, Done, Working, Idle)
-│  WORKING · IDLE · …
-│  ARCHIVE 6 ›                     per space here, starts folded
+▣ vps ●  +                       a connected machine, + = new space there
+┌──────────────────────────┐
+│ ▣ general      [+] [⌄]   │     header in the space's color: solid when selected,
+│   published · dev        │     else fading out; second line = repo · branch ↑↓ (spacegit.js)
+└──────────────────────────┘
+  ┃ TERMINALS                     panes without an agent, click = focus
+  ┃ FOLLOW UP · NEEDS YOU · DONE · WORKING · IDLE
+  ┃ ARCHIVE 6 ›                   per space here, starts folded
+  ┗ a 2 px thread in the space's color
 ```
+
+- Click the header: select the space. Chevron: fold it (remembered). Folded, it shows no counts,
+  only one mark for its most urgent agent that is waiting, done or working.
+- "+" on hover: Terminal or an installed agent, started in that space. A new tab in a folded
+  space unfolds it.
+- Right-click: the space menu. Drag: reorder. Drop an image or `.app`: its picture.
+- The narrow rail lists the spaces' pictures on top.
+
+**Right-click menus** (mods/menu-icons): an agent row has Rename, Pin, Follow up, Archive and
+Close; a terminal row Rename, Split right, Split down and Close.
 
 Agent names and tab names are cut by their width, not a character count: a wider sidebar
 shows more.

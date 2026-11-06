@@ -51,7 +51,8 @@ const isBashTool = (p) => /\/shell-snapshots\/snapshot-/.test(p.command);
 // The command Claude asked for, from its Bash wrapper: first line, without a leading `cd … &&`.
 /** @param {string} wrapper */
 function bashCommand(wrapper) {
-  const quoted = / eval '([\s\S]*)' < \/dev\/null && pwd -P/.exec(wrapper)?.[1];
+  // Commands with their own stdin (a heredoc) come without the `< /dev/null`.
+  const quoted = / eval '([\s\S]*)'(?: < \/dev\/null)? && pwd -P/.exec(wrapper)?.[1];
   if (!quoted) return "Bash";
   const text = quoted.replace(/\\012/g, "\n").replace(/'"'"'/g, "'");
   const line = text.split("\n").map((l) => l.trim()).find(Boolean) ?? "Bash";

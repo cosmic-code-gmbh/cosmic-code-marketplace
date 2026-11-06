@@ -1,12 +1,12 @@
 // Context menus (Herdr's items). Opened as a popup with
-// props { tab: "pane" | "tab" | "space" | "global", target }.
+// props { tab: "pane" | "tab" | "space" | "agent" | "terminal" | "global", target }.
 // ↑/↓ move, Enter runs, Esc closes. An item is [label, command, args];
 // a command "worktree" opens the worktree dialog instead, "space-look" spaces-icons'
 // icon & color popup (it also starts the image picker, which outlives this popup).
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { run, props, closeOverlay, openOverlay, theme, keys, terminals, spaces, panes, exec } from "herdr";
+import { run, props, closeOverlay, openOverlay, theme, keys, terminals, spaces, panes, exec, shared } from "herdr";
 
 // Where a space is now: its first terminal's live folder, else where it was made.
 function place(s) {
@@ -48,6 +48,30 @@ function items(p, git) {
         ["Close pane", "pane.close", { pane: tg.pane }],
       ];
     }
+    // A row in the agents list. target { terminal, pane, tab }. Follow up and Archive are
+    // agents-icons' shelves (shared lists it keeps tidy), so they go to it as a command.
+    case "agent": {
+      const term = terminals().find((t) => t.address === tg.terminal);
+      const pinned = Boolean(term?.labels?.["herdr.pinned"]);
+      const on = (key) => (shared(key) ?? []).includes(tg.terminal);
+      const shelf = (key, yes) => `agents-icons.shelf:${key}:${yes ? "on" : "off"}:${tg.terminal}`;
+      const later = on("agents.followUp"), archived = on("agents.archive");
+      return [
+        ["Rename", "tab.rename", { id: tg.tab }],
+        ...(archived ? [] : [[pinned ? "Unpin" : "Pin to the top", "terminal.pin", { terminal: tg.terminal, pinned: !pinned }]]),
+        ...(archived ? [] : [[later ? "Followed up: move back" : "Move to Follow up", shelf("agents.followUp", !later), {}]]),
+        [archived ? "Take out of Archive" : "Archive", shelf("agents.archive", !archived), {}],
+        ["Close", "pane.close", { pane: tg.pane }],
+      ];
+    }
+    // A terminal row in the agents list (a pane without an agent). target { pane, tab }.
+    case "terminal":
+      return [
+        ["Rename", "tab.rename", { id: tg.tab }],
+        ["Split right", "pane.split", { direction: "right", pane: tg.pane }],
+        ["Split down", "pane.split", { direction: "down", pane: tg.pane }],
+        ["Close", "pane.close", { pane: tg.pane }],
+      ];
     case "tab":
       return [
         ["Rename", "tab.rename", { id: tg.id }],
@@ -76,6 +100,9 @@ function items(p, git) {
 
 function menuIcon(command) {
   if (command === "space-look") return "mods/spaces-icons/glyphs/palette.svg";
+  if (command === "terminal.pin") return "mods/workspace-chrome/pin.svg";
+  if (command.startsWith("agents-icons.shelf:agents.followUp:")) return "mods/agents-icons/list-todo.svg";
+  if (command.startsWith("agents-icons.shelf:agents.archive:")) return "mods/workspace-chrome/archive.svg";
   const name = command.endsWith(".close") ? "x" : command.endsWith(".rename") ? "square-pen" : command.endsWith(".new") ? "plus" : command === "worktree" ? "git-branch" : command.startsWith("spaces-icons.") ? "square" : command === "app.help" ? "terminal" : command === "app.theme" ? "settings" : command === "pane.split" ? "panel-right" : command === "pane.zoom" ? "square" : "terminal";
   return `mods/workspace-chrome/${name}.svg`;
 }

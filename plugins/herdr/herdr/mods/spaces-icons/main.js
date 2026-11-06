@@ -10,6 +10,8 @@
 // name from DUO }) or its first letter, white on its color (shared
 // "space.colors"). Both are picked in this mod's popup (props { iconPicker: spaceId }),
 // which the space menu opens as "Icon & color…".
+// The main layout no longer shows this list (agents-icons draws the space headers);
+// the popup is what stays in use, and its "Choose image…" goes to agents-icons.
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
@@ -593,9 +595,10 @@ export default class Spaces extends View {
       .child(h_flex().flex_wrap().gap(2).children([tile(null), ...DUO.map(tile)]))
       .child(div().my(6).h(1).bg(t.border))
       .child(action("pick-image", pic ? "Change image…" : "Choose image…", () => {
-        // spaces-icons' sidebar view runs the file picker: a popup's tasks end when it closes.
+        // The sidebar runs the file picker: a popup's tasks end when it closes. Commands reach
+        // shown mods only: the main layout shows agents-icons' space headers, not this list.
         closeOverlay(props().overlay);
-        run(`spaces-icons.icon:${id}`, {});
+        run(`agents-icons.icon:${id}`, {});
       }))
       .when(Boolean(pic), (el) => el.child(action("remove-image", "Remove image", (_e, cx) => { clearIcon(id); cx.notify(); })));
   }
