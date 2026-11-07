@@ -175,7 +175,8 @@ fokusboard plugin (Claude Code)                       mods/fokus (Herdr)
   "Erledigte ausblenden" folds the finished ones away (kept per Herdr, not per session).
 - **Pläne:** each tracked plan with its version, its `review.md` (#2 · gegen v4) and `verify.md`
   (v4 · vollständig) beneath; a click opens the file.
-- **Griffe:** prompts sent again and again, one list for all sessions (kept by fokusboard). A
+- **Griffe:** prompts sent again and again, one list for all sessions and projects (kept in
+  fokusboard's store and mirrored to `~/.local/state/fokusboard/griffe.json`, which every terminal reads). A
   click puts one in the prompt box, `{plan}` filled with the open plan's path; a right-click opens a
   dialog to change its label and prompt or delete it, "+ Griff hinzufügen" opens it empty.
 - **Session:** who held the ball over the last two hours, sampled here every 5 s from the agent's
@@ -194,7 +195,7 @@ rename it to "" to hand it back. Before the board has a thread, the tab shows Cl
 terminal title, as the Agents list does. The board folder is watched and also read every 5 s,
 so a change the watch missed, or a tab Herdr recognised late, still gets its name.
 
-Needs `fokusboard@cosmic-code-marketplace` 0.11.1 or later (Griffe and editing them, plans, answer notes; older versions still draw the rest).
+Needs `fokusboard@cosmic-code-marketplace` 0.11.2 or later (Griffe and editing them, plans, answer notes; older versions still draw the rest).
 
 ## The Artefakte dropdown
 

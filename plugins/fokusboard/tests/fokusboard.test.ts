@@ -569,6 +569,7 @@ describe('session', () => {
     on('ui.open', () => ({ value: { isPlaced: true } }))
     const store: Record<string, unknown> = { griffe: [{ label: 'Simplify', text: '/simplify' }] }
     memoryStore(on, store)
+    mock.env(on, {})
     engineStart(on)
     on('prompt.compose', () => ({ sections: [] }))
     const box = promptBox(on)
@@ -578,6 +579,26 @@ describe('session', () => {
     expect(box.filled).toEqual(['/simplify'])
     await ui.input({ key: 'griff-input-1', text: 'sol loop verify {plan}' })
     expect(store.griffe).toEqual([{ label: 'Simplify', text: '/simplify' }, { label: 'sol loop verify {plan}', text: 'sol loop verify {plan}' }])
+  })
+
+  test('a change reads the store fresh, so a Griff another session added is kept', async ($, on) => {
+    on('ui.open', () => ({ value: { isPlaced: true } }))
+    const store: Record<string, unknown> = { griffe: [{ label: 'A', text: 'a' }] }
+    memoryStore(on, store)
+    mock.env(on, {})
+    engineStart(on)
+    on('prompt.compose', () => ({ sections: [] }))
+    await $.session.start({ cwd: '/r', surface: 'terminal', isInteractive: true })
+    // Another session adds a Griff while this one runs
+    store.griffe = [{ label: 'A', text: 'a' }, { label: 'B', text: 'b' }]
+    const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+    const field = (await ui.find({ type: 'Input' }))!
+    await ui.input({ key: String(field.key), text: 'c' })
+    expect(store.griffe).toEqual([
+      { label: 'A', text: 'a' },
+      { label: 'B', text: 'b' },
+      { label: 'c', text: 'c' },
+    ])
   })
 
   test('a first session gets the default Griffe and no earlier board', async ($, on) => {
@@ -726,7 +747,8 @@ describe('herdr sidebar', () => {
     await s.clock.advance(1000)
     expect(s.box.filled).toEqual(['Zu „Tab?“: Ja'])
     expect(s.box.sent).toEqual([])
-    expect(s.board().griffe.at(-1)).toEqual({ label: '/security-review', text: '/security-review' })
+    expect(JSON.parse(s.written['/h/.local/state/fokusboard/griffe.json']!).at(-1)).toEqual({ label: '/security-review', text: '/security-review' })
+    expect(s.board().griffe).toBeUndefined()
     // The same clicks are not carried out twice
     await s.clock.advance(1000)
     expect(s.box.filled).toEqual(['Zu „Tab?“: Ja'])

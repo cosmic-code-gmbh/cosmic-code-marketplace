@@ -12,6 +12,7 @@ const TOOL = 'mcp__fokusboard__update'
 const POLL_MS = 5000
 // How often the Herdr bridge reads the sidebar's clicks and publishes the board
 const HERDR_MS = 1000
+const GRIFFE_MS = 2000
 // How often the board is saved for a later --resume, and how many sessions are kept
 const SAVE_MS = 2000
 const SAVED_SESSIONS = 30
@@ -631,11 +632,35 @@ export function editGriff(list: Griff[], index: number, text: string, label?: st
 // {plan} becomes the open plan's path (the newest one not yet verified); without one it stays for the person to fill
 export const fillPlan = (text: string, plan: string | null) => (plan ? text.replaceAll('{plan}', plan) : text)
 
-async function changeGriffe($: EngineInterface, fn: (list: Griff[]) => Griff[]) {
-  await update($, griffe, fn)
+// The Griffe live in the plugin's store, one list for every session and project. Sessions keep
+// no copy of their own: each change reads the store right before it writes, so one session never
+// overwrites what another changed.
+async function loadGriffe($: EngineInterface): Promise<Griff[]> {
   try {
-    await $.store.set(GRIFFE_KEY, await read($, griffe))
+    const saved = await $.store.get(GRIFFE_KEY)
+    return Array.isArray(saved) ? (saved as Griff[]) : DEFAULT_GRIFFE
+  } catch {
+    return DEFAULT_GRIFFE
+  }
+}
+
+// Mirrors the store into this session's pane and into griffe.json, which every Herdr terminal reads
+async function syncGriffe($: EngineInterface, list?: Griff[]) {
+  const now = list ?? (await loadGriffe($))
+  const body = JSON.stringify(now)
+  if (body !== JSON.stringify(await read($, griffe))) await update($, griffe, () => now)
+  if (herdr && body !== herdr.griffe) {
+    await $.fs.write(`${herdr.dir}/griffe.json`, body)
+    herdr.griffe = body
+  }
+}
+
+async function changeGriffe($: EngineInterface, fn: (list: Griff[]) => Griff[]) {
+  const next = fn(await loadGriffe($))
+  try {
+    await $.store.set(GRIFFE_KEY, next)
   } catch {}
+  await syncGriffe($, next)
 }
 
 // The plan a Griff's {plan} points at, relative to the session folder
@@ -738,7 +763,7 @@ export function reviewLine(s: PlanStatus): string | null {
 //   this mod ◄──intents with `at`, newest last── ~/.local/state/fokusboard/<terminal>.inbox.jsonl ◄── Herdr
 //
 // Set in session.start when Claude runs in a Herdr terminal (HC_TERMINAL_ID); null elsewhere.
-let herdr: { terminal: string; dir: string; seen: number; last: string } | null = null
+let herdr: { terminal: string; dir: string; seen: number; last: string; griffe: string } | null = null
 
 // What a click in the Herdr sidebar asks for; the board does it here, so its logic lives in one place
 export type Intent =
@@ -757,7 +782,6 @@ async function snapshot($: EngineInterface, ended = false) {
   const status = await read($, planStatus)
   const codeEdit = await read($, lastCodeEditAt)
   const plansOut = []
-  const plan = await openPlan($)
   for (const s of status) {
     const stage = stageOf(s, codeEdit)
     const rel = await relative($, s.path)
@@ -790,7 +814,6 @@ async function snapshot($: EngineInterface, ended = false) {
     mode: await read($, mode),
     ...board,
     plans: plansOut,
-    griffe: (await read($, griffe)).map(g => ({ ...g, text: fillPlan(g.text, plan) })),
   }
 }
 
@@ -849,7 +872,7 @@ async function handle($: EngineInterface, x: Intent) {
       return askAbout($, x.ids?.length ? all.filter(d => x.ids!.includes(d.id)) : all)
     }
     case 'griff.put': {
-      const g = (await read($, griffe))[x.index]
+      const g = (await loadGriffe($))[x.index]
       return g && putGriff($, g)
     }
     case 'griff.add':
@@ -900,15 +923,6 @@ export const register: Register = on => {
     void $.clock.every(POLL_MS, async () => {
       if ((await read($, plans)).length > 0) await refresh($)
     })
-    // The person's Griffe are one list for every session; the board comes back only to a resumed session
-    if ((await read($, griffe)).length === 0) {
-      try {
-        const saved = (await $.store.get(GRIFFE_KEY)) as Griff[] | undefined
-        await update($, griffe, () => (Array.isArray(saved) ? saved : DEFAULT_GRIFFE))
-      } catch {
-        await update($, griffe, () => DEFAULT_GRIFFE)
-      }
-    }
     // classic.SessionStart, which sets boardId, runs before this hook
     if (boardId && isResumed) {
       try {
@@ -925,8 +939,15 @@ export const register: Register = on => {
     const terminal = await $.env.get('HC_TERMINAL_ID')
     const home = await $.env.get('HOME')
     // Clicks from before this start were meant for an earlier session
-    herdr = terminal && home ? { terminal, dir: `${home}/.local/state/fokusboard`, seen: Date.now(), last: '' } : null
+    herdr = terminal && home ? { terminal, dir: `${home}/.local/state/fokusboard`, seen: Date.now(), last: '', griffe: '' } : null
     if (herdr) void $.clock.every(HERDR_MS, () => herdrTick($))
+    // The Griffe follow the store, so a change in another session shows up here too
+    await syncGriffe($)
+    void $.clock.every(GRIFFE_MS, async () => {
+      try {
+        await syncGriffe($)
+      } catch {}
+    })
     return next(e)
   })
 

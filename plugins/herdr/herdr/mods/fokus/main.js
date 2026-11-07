@@ -201,9 +201,12 @@ export default class Fokus extends View {
     if (!this.terminal) return;
     const terminal = this.terminal;
     const text = await readTextFile(`${DIR}/${terminal}.json`).catch(() => null);
+    // The Griffe are one list for every session; fokusboard keeps it in griffe.json
+    const griffe = await readTextFile(`${DIR}/griffe.json`).catch(() => null);
     const published = await hookArtifacts(terminal);
     if (terminal !== this.terminal) return; // the focus moved on while reading
     this.board = (text && readJson(text)) ?? null;
+    this.griffeList = (griffe && readJson(griffe)) ?? null;
     this.published = published;
     cx.notify();
   }
@@ -720,7 +723,7 @@ export default class Fokus extends View {
     const links = [...(b.artifacts ?? []), ...this.published.filter((p) => !(b.artifacts ?? []).some((a) => a.href === p.href))];
     const todos = b.todos ?? [];
     const plans = b.plans ?? [];
-    const griffe = b.griffe ?? [];
+    const griffe = this.griffeList ?? b.griffe ?? [];
     const session = this.session(t, b);
 
     const body = v_flex()
