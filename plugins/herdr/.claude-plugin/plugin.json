@@ -1,7 +1,7 @@
 {
   "name": "herdr",
   "description": "Marcus' Herdr desktop setup: Artefakte dropdown in the top bar (all claude.ai artifacts, session, pins, search), the tabs-run bar, the main-filetree layout, settings, keys and the Rex color themes.",
-  "version": "0.12.4",
+  "version": "0.12.5",
   "author": {
     "name": "Marcus Thor"
   },

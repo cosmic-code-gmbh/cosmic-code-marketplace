@@ -135,7 +135,7 @@ they are connected, then Pinned, then this computer's spaces.
   only one mark for its most urgent agent that is waiting, done or working.
 - "+" and the fold chevron show on hover, side by side; an agent's sub-agent chevron too
   (folded, it stays with its count).
-- The shown panes' frames take the selected space's color (faint, full when focused):
+- The shown panes' frames, 2 px, take the selected space's color (faint, full when focused):
   agents-icons rewrites the layout's pane border and focus colors via `layout.set` when the
   space or its color changes.
 - "+" on hover: Terminal or an installed agent, started in that space. A new tab in a folded

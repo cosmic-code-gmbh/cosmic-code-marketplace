@@ -500,7 +500,7 @@ export default class Agents extends View {
 
   // Frames the shown panes in the selected space's color: every block of the layout that
   // frames panes (content.pane with border and focus) gets it, faint as its border and full
-  // when focused. Only when the space or its color changed, and only if the layout differs.
+  // when focused, 2 px wide. Only when the space or its color changed, and only if the layout differs.
   paintPanes(hex) {
     if (!hex || this.painted === hex) return;
     this.painted = hex;
@@ -508,9 +508,9 @@ export default class Agents extends View {
     let changed = false;
     const walk = (n) => {
       const p = n?.content?.pane;
-      if (p?.border && p?.focus && (p.border.color !== hex + "59" || p.focus.color !== hex)) {
-        p.border.color = hex + "59";
-        p.focus.color = hex;
+      if (p?.border && p?.focus && (p.border.color !== hex + "59" || p.focus.color !== hex || p.border.width !== 2 || p.focus.width !== 2)) {
+        p.border = { ...p.border, width: 2, color: hex + "59" };
+        p.focus = { ...p.focus, width: 2, color: hex };
         changed = true;
       }
       (n?.children ?? []).forEach(walk);
