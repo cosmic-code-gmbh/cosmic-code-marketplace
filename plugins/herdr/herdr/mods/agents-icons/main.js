@@ -120,12 +120,14 @@ const KNOWN = "new-menu.agents";
 const SOFT = { duration: 180, easing: "ease-out" };
 // Rows have fixed heights; a folding space body adds them up to know how tall it opens.
 const tall = (el, h) => ((el._h = h), el);
-// The selected row: its space's color behind it, and a bar in that color on the left,
-// so it stands out in a long list.
-function glow(id, on, hex, radius) {
+// The selected row: its space's color behind it, so it stands out in a long list.
+// link: the row sits in a space card, 9 px right of the card's thread; a branch joins the
+// thread to the row, as in a file tree.
+function glow(id, on, hex, radius, link = false) {
   return h_flex().id(id).absolute().top(0).left(0).size_full().rounded(radius).bg(hex + "38")
     .opacity(on ? 1 : 0).transition("opacity", SOFT)
-    .child(div().w(3).h_full().rounded_l(radius).bg(hex));
+    .when(link, (el) => el.child(h_flex().absolute().left(-9).top(0).w(9).h_full().items_center()
+      .child(div().w_full().h(2).bg(hex))));
 }
 
 export default class Agents extends View {
@@ -423,7 +425,8 @@ export default class Agents extends View {
 
   // One terminal: its icon, a name, and grey the folder it's in. A click focuses its pane,
   // a right-click opens its menu (menu-icons, "terminal").
-  termRow(t, { p, tab, space }) {
+  // link: inside a space card (see glow).
+  termRow(t, { p, tab, space }, link = false) {
     const live = clean(p.title);
     // A named tab says what it is; else a telling title (not a path or user@host); else the program.
     const telling = live && live !== p.program?.name && !/^[~/]/.test(live) && !live.includes("@");
@@ -431,7 +434,7 @@ export default class Agents extends View {
     const where = p.cwd ? p.cwd.split("/").filter(Boolean).at(-1) ?? "/" : "";
     return h_flex().id(`term-${p.pane}`).relative().px(8).h(28).flex_none().gap(9).rounded(8).items_center()
       .cursor_pointer().hover((s) => s.bg(t.hover))
-      .child(glow(`term-sel-${p.pane}`, p.focused, this.spaceHexFor?.(space) ?? t.accent.slice(0, 7), 8))
+      .child(glow(`term-sel-${p.pane}`, p.focused, this.spaceHexFor?.(space) ?? t.accent.slice(0, 7), 8, link))
       .on_click(() => run("pane.focus", { pane: p.pane }))
       .on_mouse_down("right", () => openOverlay({ mod: "menu-icons", kind: "popup", width: 200, height: 160, props: { tab: "terminal", target: { pane: p.pane, tab: tab.id } } }))
       // The section's blue on the icon: terminals read apart from the agents' program icons.
@@ -496,7 +499,10 @@ export default class Agents extends View {
   }
 
   // indent: where the tree line starts, under the middle of the parent's program icon.
-  subRow(t, s, shown, compact, indent) {
+  // tint: the space's color for the tree lines while the parent row is selected.
+  // first: right under the parent row, whose line starts at its edge instead of reaching
+  // into it (a selected parent's card would be crossed).
+  subRow(t, s, shown, compact, indent, tint = null, first = false) {
     const k = s.t;
     const st = kidStatus(k, this.listed);
     const pic = icon(k.program, 14, t.foreground);
@@ -514,8 +520,8 @@ export default class Agents extends View {
       .when(on, (el) => el.bg(t.raised))
       .hover((s) => s.bg(t.hover))
       .on_click(() => k.owner ? run("pane.focus", { pane: this.listedPane.get(k.owner) }) : this.peek(k.address))
-      .children(s.lines.map(l => div().self_start().mt(-4).w(9).h(17).mr(4).flex_none()
-        .when(Boolean(l), el => el.border_l(1.5).border_color(t.input))
+      .children(s.lines.map(l => div().self_start().mt(first ? 0 : -4).w(9).h(first ? 13 : 17).mr(4).flex_none()
+        .when(Boolean(l), el => el.border_l(1.5).border_color(tint ?? t.input))
         .when(l === "└" || l === "├", el => el.border_b(1.5).rounded_bl(6))))
       .when(Boolean(pic), el => el.child(div().mr(8).child(pic)))
       .child(div().flex_1().truncate().text_color(on ? t.foreground : t.muted).child(k.name || k.template || k.program?.name || k.address))
@@ -590,7 +596,7 @@ export default class Agents extends View {
       // The parent's program icon (16 px) sits at 8 px, or after the space icon when the
       // row shows one: the line starts under its middle.
       const indent = showsSpace(a) ? 40 : 15;
-      return [r, ...subs.map((s) => tall(this.subRow(t, s, shown, sectioned, indent), 26))];
+      return [r, ...subs.map((s, j) => tall(this.subRow(t, s, shown, sectioned, indent, a.focused ? spaceHex(a.space) : null, j === 0), 26))];
     };
 
     // The fold chevron; folded, the count too, colored by the most urgent one.
@@ -735,7 +741,7 @@ export default class Agents extends View {
         .items_center()
         .gap(9)
         .relative()
-        .child(glow(`ag-sel-${a.address}`, a.focused, spaceHex(a.space), 8))
+        .child(glow(`ag-sel-${a.address}`, a.focused, spaceHex(a.space), 8, bySpaceStatus && !showsSpace(a)))
         .cursor_pointer()
         .hover((s) => s.bg(t.hover))
         .on_hover((on, cx) => {
@@ -981,7 +987,7 @@ export default class Agents extends View {
       // A section in a card: 8 px above a 22 px label.
       const head = tall(header(g), 30);
       if (this.isFolded(g.id)) return [head];
-      return [head, ...(g.terms ? g.members.map((it) => tall(this.termRow(t, it), 28)) : g.members.flatMap(withKids))];
+      return [head, ...(g.terms ? g.members.map((it) => tall(this.termRow(t, it, true), 28)) : g.members.flatMap(withKids))];
     };
     // By space and status: the space's header, then its sections indented to the right
     // of a thread in the space's color that runs down from under its picture.

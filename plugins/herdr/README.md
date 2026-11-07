@@ -140,8 +140,9 @@ they are connected, then Pinned, then this computer's spaces.
 - Soft motion, all native (`.transition`): the selected row fades in, switching space
   crossfades the solid header and the fading one, and folding slides the card's body open and
   shut (its height is the sum of the rows' fixed heights).
-- The selected agent or terminal: its space's color behind it, a bar in that color on the
-  left, the name in bold. Hover stays grey.
+- The selected agent or terminal: its space's color behind it, the name in bold, and a
+  branch from the card's thread to the row, as in a file tree; its sub-agents' lines take the
+  space's color too. Hover stays grey.
 
 **Right-click menus** (mods/menu-icons): an agent row has Rename, Pin, Follow up, Archive and
 Close; a terminal row Rename, Split right, Split down and Close.
