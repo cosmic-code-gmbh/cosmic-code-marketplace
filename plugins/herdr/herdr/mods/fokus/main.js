@@ -22,7 +22,7 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { agents, exec, focused, home, readTextFile, theme, watchFolder, writeTextFile } from "herdr";
+import { agents, closeOverlay, exec, focused, home, openOverlay, props, readTextFile, theme, watchFolder, writeTextFile } from "herdr";
 
 const DIR = `${home()}/.local/state/fokusboard`;
 const ARTIFACTS = `${home()}/.local/state/herdr-artifacts/artifacts.jsonl`;
@@ -31,6 +31,8 @@ const MONO = "Geist Mono";
 // Golden-ratio type scale: labels and meta, text
 const XS = 10;
 const S = 16;
+// Griffe only: Marcus wants them between XS and S (off the 1.618 scale on purpose)
+const GRIFF = 12;
 const KEEP_INTENTS = 30;
 // Session sampling: how often, how far back, and when waiting on you turns into a pause
 const SAMPLE_MS = 5000;
@@ -135,19 +137,21 @@ export default class Fokus extends View {
     this.tried = null; // the focused terminal last looked at
     this.board = null;
     this.published = [];
-    this.hover = null;
     this.view = load("view", { hideDone: false });
     // Per terminal: [{k: "w"|"y", from, to}], kept across restarts of the app
     this.timeline = load("timeline", {});
-    this.isAdding = false;
-    this.input = InputState.new({ placeholder: "Befehl, z. B. /simplify" });
-    this.input.on("submit", (_e, cx) => {
-      const text = this.input.value().trim();
-      if (text) this.send({ do: "griff.add", text });
-      this.input.set_value("");
-      this.isAdding = false;
-      cx.notify();
-    });
+    // Opened as the Griff dialog (see openGriff): just the form, for the terminal it came from
+    const g = props()?.griff;
+    if (g) {
+      this.dialog = g;
+      this.terminal = g.terminal;
+      this.labelInput = InputState.new({ value: g.label ?? "", placeholder: "z. B. Simplify" });
+      this.textInput = InputState.new({ value: g.text ?? "", placeholder: "z. B. /simplify" });
+      for (const input of [this.labelInput, this.textInput]) input.on("submit", () => this.saveGriff());
+      (g.index === "new" ? this.textInput : this.labelInput).focus();
+      this.handle = cx.focus_handle();
+      return;
+    }
     cx.spawn(async (cx) => {
       await exec("mkdir", ["-p", DIR]).catch(() => null);
       await this.follow(cx);
@@ -525,71 +529,123 @@ export default class Fokus extends View {
       .when(Boolean(a.at), (el) => el.child(this.meta(t.dim, ago(a.at))));
   }
 
-  // Griffe: one look for all; a click puts the prompt in the box, the × on hover removes it
-  griffe(t, list) {
-    const chip = (g, i) => {
-      const key = `griff-${i}`;
-      const isHot = this.hover === key;
-      return h_flex()
-        .id(key)
-        .flex_none()
-        .px(11)
-        .py(5)
-        .gap(6)
+  // Opens the Griff dialog, empty for a new one or filled with the Griff at `index`
+  openGriff(index, g) {
+    if (!this.terminal) return;
+    openOverlay({ mod: "fokus", kind: "dialog", width: 420, props: { griff: { terminal: this.terminal, index, label: g?.label, text: g?.text } } });
+  }
+
+  async saveGriff() {
+    const { index, overlay } = { ...this.dialog, overlay: props().overlay };
+    const text = this.textInput.value().trim();
+    const label = this.labelInput.value().trim() || undefined;
+    if (text) await this.send(index === "new" ? { do: "griff.add", text, label } : { do: "griff.edit", index, text, label });
+    closeOverlay(overlay);
+  }
+
+  async removeGriff() {
+    await this.send({ do: "griff.remove", index: this.dialog.index });
+    closeOverlay(props().overlay);
+  }
+
+  // The Griff dialog: label and prompt, Enter saves, Esc closes
+  griffDialog(t) {
+    const isNew = this.dialog.index === "new";
+    const label = (text) => div().pt(18).pb(6).font_family(MONO).text_size(XS).font_semibold().text_color(t.muted).child(text);
+    const field = (input) =>
+      Input.new(input).h(36).px(10).rounded(9).border_1().border_color(t.input).bg(t.background).text_size(GRIFF).text_color(t.foreground);
+    const button = (id, text, kind, action) =>
+      h_flex()
+        .id(id)
+        .h(32)
+        .px(14)
         .items_center()
-        .rounded(9)
+        .rounded(8)
+        .cursor_pointer()
+        .text_size(GRIFF)
+        .font_medium()
+        .when(kind === "primary", (el) => el.bg(t.solid).text_color(t.solid_foreground))
+        .when(kind === "plain", (el) => el.border_1().border_color(t.input).bg(t.raised).text_color(t.foreground))
+        .when(kind === "quiet", (el) => el.text_color(t.dim).hover((s) => s.text_color(t.foreground)))
+        .hover((s) => s.opacity(0.88))
+        .on_click(() => action())
+        .child(text);
+    return v_flex()
+      .id("griff-dialog")
+      .track_focus(this.handle)
+      .on_key_down((e, cx) => {
+        if (e.key === "escape") {
+          closeOverlay(props().overlay);
+          cx.stop_propagation();
+        }
+      })
+      .w_full()
+      .p(20)
+      .bg(t.popover)
+      .text_color(t.foreground)
+      .child(
+        h_flex()
+          .items_center()
+          .child(div().flex_1().text_size(S).font_semibold().child(isNew ? "Neuer Griff" : "Griff bearbeiten"))
+          .child(div().font_family(MONO).text_size(XS).text_color(t.dim).child("Esc")),
+      )
+      .child(label("LABEL"))
+      .child(field(this.labelInput))
+      .child(label("BEFEHL"))
+      .child(field(this.textInput))
+      .child(
+        div()
+          .pt(8)
+          .text_size(GRIFF)
+          .line_height(1.45)
+          .text_color(t.dim)
+          .child("Ein Klick auf den Griff schreibt den Befehl in die Eingabe. {plan} wird zum offenen Plan."),
+      )
+      .child(
+        h_flex()
+          .pt(22)
+          .gap(8)
+          .items_center()
+          .when(!isNew, (el) => el.child(button("griff-delete", "Löschen", "quiet", () => this.removeGriff())))
+          .child(div().flex_1())
+          .child(button("griff-cancel", "Abbrechen", "plain", () => closeOverlay(props().overlay)))
+          .child(button("griff-save", isNew ? "Hinzufügen" : "Sichern", "primary", () => this.saveGriff())),
+      );
+  }
+
+  // Griffe: one look for all; a click puts the prompt in the box, a right-click opens it for editing
+  griffe(t, list) {
+    const chip = (g, i) =>
+      h_flex()
+        .id(`griff-${i}`)
+        .flex_none()
+        .px(8)
+        .py(4)
+        .items_center()
+        .rounded(7)
         .bg(t.background)
         .cursor_pointer()
         .hover((s) => s.bg(t.hover))
         .tooltip(g.text)
-        .on_hover((h, cx) => {
-          this.hover = h ? key : this.hover === key ? null : this.hover;
-          cx.notify();
-        })
         .on_click(() => this.send({ do: "griff.put", index: i }))
-        .child(div().text_size(S).text_color(t.foreground).child(g.label))
-        .when(isHot, (el) =>
-          el.child(
-            div()
-              .id(`${key}-x`)
-              .text_size(S)
-              .text_color(t.dim)
-              .hover((s) => s.text_color(t.foreground))
-              .on_click((_e, cx) => {
-                cx.stop_propagation();
-                this.send({ do: "griff.remove", index: i });
-              })
-              .child("×"),
-          ),
-        );
-    };
-    const add = this.isAdding
-      ? h_flex()
-          .flex_none()
-          .w_full()
-          .h(34)
-          .px(10)
-          .rounded(9)
-          .bg(t.background)
-          .items_center()
-          .child(Input.new(this.input).flex_1().h_full().text_size(S).text_color(t.foreground))
-      : h_flex()
-          .id("griff-add")
-          .flex_none()
-          .px(11)
-          .py(5)
-          .rounded(9)
-          .cursor_pointer()
-          .text_size(S)
-          .text_color(t.dim)
-          .hover((s) => s.bg(t.hover).text_color(t.foreground))
-          .on_click((_e, cx) => {
-            this.isAdding = true;
-            this.input.focus();
-            cx.notify();
-          })
-          .child("+ Griff hinzufügen");
-    return h_flex().flex_none().flex_wrap().gap(6).children(list.map(chip)).child(add);
+        .on_mouse_down("right", (_e, cx) => {
+          cx.stop_propagation();
+          this.openGriff(i, g);
+        })
+        .child(div().text_size(GRIFF).text_color(t.foreground).child(g.label));
+    const add = div()
+      .id("griff-add")
+      .flex_none()
+      .px(8)
+      .py(4)
+      .rounded(7)
+      .cursor_pointer()
+      .text_size(GRIFF)
+      .text_color(t.dim)
+      .hover((s) => s.bg(t.hover).text_color(t.foreground))
+      .on_click(() => this.openGriff("new", null))
+      .child("+ Griff hinzufügen");
+    return h_flex().flex_none().flex_wrap().gap(5).children(list.map(chip)).child(add);
   }
 
   // Who held the ball when, over the last two hours, and the figures that follow from it
@@ -629,6 +685,7 @@ export default class Fokus extends View {
   // ── the view ────────────────────────────────────────────────────────────────
 
   render(cx) {
+    if (this.dialog) return this.griffDialog(theme());
     const t = theme();
     // A new focus: look whether that terminal has a board (render stays synchronous)
     const now = focused()?.terminal ?? null;

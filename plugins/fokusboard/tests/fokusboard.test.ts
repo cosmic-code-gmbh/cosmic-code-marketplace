@@ -4,6 +4,7 @@ import type { PlanStatus } from '../types'
 import {
   DEFAULT_GRIFFE,
   addGriff,
+  editGriff,
   ago,
   applyUpdate,
   artifactKind,
@@ -218,6 +219,13 @@ describe('griffe', () => {
     expect(fillPlan('sol loop verify {plan}', '.claude/plans/a.md')).toBe('sol loop verify .claude/plans/a.md')
     expect(fillPlan('sol loop verify {plan}', null)).toBe('sol loop verify {plan}')
     expect(DEFAULT_GRIFFE.map(g => g.label)).toContain('Plan komplett umsetzen')
+  })
+
+  test('editGriff changes label and prompt in place, an empty prompt changes nothing', () => {
+    const list = [{ label: 'A', text: 'a' }, { label: 'B', text: 'b' }]
+    expect(editGriff(list, 1, ' /verify ', 'Prüfen')).toEqual([{ label: 'A', text: 'a' }, { label: 'Prüfen', text: '/verify' }])
+    expect(editGriff(list, 0, '  ')).toBe(list)
+    expect(editGriff(list, 5, 'x')).toBe(list)
   })
 })
 

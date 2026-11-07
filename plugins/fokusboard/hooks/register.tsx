@@ -619,6 +619,15 @@ export function addGriff(list: Griff[], text: string, label?: string): Griff[] {
   return [...list, { label: name, text: clean }].slice(0, 24)
 }
 
+// The Griff at `index` with a new label and prompt; an empty prompt leaves it as it was
+export function editGriff(list: Griff[], index: number, text: string, label?: string): Griff[] {
+  const g = list[index]
+  const clean = text.trim()
+  if (!g || !clean) return list
+  const named = addGriff([], clean, label)[0]!
+  return list.map((x, i) => (i === index ? named : x))
+}
+
 // {plan} becomes the open plan's path (the newest one not yet verified); without one it stays for the person to fill
 export const fillPlan = (text: string, plan: string | null) => (plan ? text.replaceAll('{plan}', plan) : text)
 
@@ -739,6 +748,7 @@ export type Intent =
   | { do: 'ask'; ids?: string[] }
   | { do: 'griff.put' | 'griff.remove'; index: number }
   | { do: 'griff.add'; text: string; label?: string }
+  | { do: 'griff.edit'; index: number; text: string; label?: string }
   | { do: 'todos.clearDone' | 'refresh' }
 
 // Everything the sidebar draws, with each plan's stage and next steps worked out already
@@ -844,6 +854,8 @@ async function handle($: EngineInterface, x: Intent) {
     }
     case 'griff.add':
       return changeGriffe($, list => addGriff(list, x.text, x.label))
+    case 'griff.edit':
+      return changeGriffe($, list => editGriff(list, x.index, x.text, x.label))
     case 'griff.remove':
       return changeGriffe($, list => list.filter((_, i) => i !== x.index))
     case 'todos.clearDone':
