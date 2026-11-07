@@ -115,6 +115,19 @@ function icon(p, size, color) {
 // The last agents each machine reported, shared with the shipped new-menu (same key).
 const KNOWN = "new-menu.agents";
 
+// A selection background that fades in and out natively instead of switching hard.
+// Put it first in a .relative() element; it sits behind the row's content.
+const SOFT = { duration: 180, easing: "ease-out" };
+// Rows have fixed heights; a folding space body adds them up to know how tall it opens.
+const tall = (el, h) => ((el._h = h), el);
+// The selected row: its space's color behind it, and a bar in that color on the left,
+// so it stands out in a long list.
+function glow(id, on, hex, radius) {
+  return h_flex().id(id).absolute().top(0).left(0).size_full().rounded(radius).bg(hex + "38")
+    .opacity(on ? 1 : 0).transition("opacity", SOFT)
+    .child(div().w(3).h_full().rounded_l(radius).bg(hex));
+}
+
 export default class Agents extends View {
   init(_props, cx) {
     if (props()?.sortMenu) return;
@@ -403,27 +416,27 @@ export default class Agents extends View {
       if (!p.terminal || p.status || p.program?.agent) continue;
       const at = tabSpace.get(p.tab);
       if (!at) continue;
-      (bySpace.get(at.space.id) ?? bySpace.set(at.space.id, { space: at.space, items: [] }).get(at.space.id)).items.push({ p, tab: at.tab });
+      (bySpace.get(at.space.id) ?? bySpace.set(at.space.id, { space: at.space, items: [] }).get(at.space.id)).items.push({ p, tab: at.tab, space: at.space.id });
     }
     return bySpace;
   }
 
   // One terminal: its icon, a name, and grey the folder it's in. A click focuses its pane,
   // a right-click opens its menu (menu-icons, "terminal").
-  termRow(t, { p, tab }) {
+  termRow(t, { p, tab, space }) {
     const live = clean(p.title);
     // A named tab says what it is; else a telling title (not a path or user@host); else the program.
     const telling = live && live !== p.program?.name && !/^[~/]/.test(live) && !live.includes("@");
     const name = tab.named ? tab.name : telling ? live : p.program?.name || "Terminal";
     const where = p.cwd ? p.cwd.split("/").filter(Boolean).at(-1) ?? "/" : "";
-    return h_flex().id(`term-${p.pane}`).px(8).h(28).flex_none().gap(9).rounded(8).items_center()
-      .when(p.focused, (el) => el.bg(t.selected))
+    return h_flex().id(`term-${p.pane}`).relative().px(8).h(28).flex_none().gap(9).rounded(8).items_center()
       .cursor_pointer().hover((s) => s.bg(t.hover))
+      .child(glow(`term-sel-${p.pane}`, p.focused, this.spaceHexFor?.(space) ?? t.accent.slice(0, 7), 8))
       .on_click(() => run("pane.focus", { pane: p.pane }))
       .on_mouse_down("right", () => openOverlay({ mod: "menu-icons", kind: "popup", width: 200, height: 160, props: { tab: "terminal", target: { pane: p.pane, tab: tab.id } } }))
       // The section's blue on the icon: terminals read apart from the agents' program icons.
       .child(p.program?.tint || !p.program?.icon ? svg(p.program?.icon ?? "icons/shell.svg").size(14).flex_none().text_color(t.ansi4) : icon(p.program, 14))
-      .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(name))
+      .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).when(p.focused, (el) => el.font_semibold()).child(name))
       .when(Boolean(where) && where !== name, (el) => el.child(div().flex_none().max_w(90).truncate().text_size(11).text_color(t.dim).child(where)));
   }
 
@@ -572,12 +585,12 @@ export default class Agents extends View {
 
     const withKids = (a, i) => {
       const subs = collapsed ? [] : this.tree(all, a.address);
-      const r = row(a, i, subs);
+      const r = tall(row(a, i, subs), collapsed ? 26 : 30);
       if (this.folded.has(a.address)) return [r];
       // The parent's program icon (16 px) sits at 8 px, or after the space icon when the
       // row shows one: the line starts under its middle.
       const indent = showsSpace(a) ? 40 : 15;
-      return [r, ...subs.map((s) => this.subRow(t, s, shown, sectioned, indent))];
+      return [r, ...subs.map((s) => tall(this.subRow(t, s, shown, sectioned, indent), 26))];
     };
 
     // The fold chevron; folded, the count too, colored by the most urgent one.
@@ -643,6 +656,7 @@ export default class Agents extends View {
     };
     // terminalRows draws the same space pictures.
     this.spacePicFor = spacePic;
+    this.spaceHexFor = spaceHex;
 
     const row = (a, i, subs = []) => {
       const pic = icon(a.program, 16, t.foreground);
@@ -720,7 +734,8 @@ export default class Agents extends View {
         .rounded(8)
         .items_center()
         .gap(9)
-        .when(a.focused, (el) => el.bg(t.selected))
+        .relative()
+        .child(glow(`ag-sel-${a.address}`, a.focused, spaceHex(a.space), 8))
         .cursor_pointer()
         .hover((s) => s.bg(t.hover))
         .on_hover((on, cx) => {
@@ -739,7 +754,7 @@ export default class Agents extends View {
             cx.notify();
           })).child(pic)))
         .child(h_flex().flex_1().min_w(0).gap(5).items_center()
-          .child(div().min_w(0).truncate().text_color(idle ? t.muted : t.foreground).child(name)))
+          .child(div().min_w(0).truncate().text_color(idle && !a.focused ? t.muted : t.foreground).when(a.focused, (el) => el.font_semibold()).child(name)))
         .when(Boolean(machine), el => el.child(div().text_size(10).text_color(t.dim).child(machine)))
         .when(subs.length > 0, el => el.child(fold(a, subs)))
         .when(this.hovered === a.address, el => el.child(h_flex().flex_none().gap(2).when(!isArchived, (el) => el.child(laterBtn)).child(archiveBtn).when(!isArchived, (el) => el.child(pin))))
@@ -828,7 +843,10 @@ export default class Agents extends View {
       const tint = (a) => hex + Math.round(Math.max(0, a) * 255).toString(16).padStart(2, "0");
       // Text in the space's color, lifted toward white so it reads on the tinted card.
       const lift = (k) => "#" + [1, 3, 5].map((i) => Math.round(parseInt(hex.slice(i, i + 2), 16) * (1 - k) + 255 * k).toString(16).padStart(2, "0")).join("");
-      const band = on ? null : h_flex().absolute().top(0).left(0).size_full()
+      // Both layers stay; switching space crossfades them.
+      const fade = (el, shown) => el.opacity(shown ? 1 : 0).transition("opacity", { duration: 220, easing: "ease-out" });
+      const solid = fade(div().id(`solid-${g.id}`).absolute().top(0).left(0).size_full().rounded(11).bg(tint(0.55)), on);
+      const band = fade(h_flex().id(`band-${g.id}`).absolute().top(0).left(0).size_full(), !on)
         .child(div().w(22).flex_none().h_full().rounded_l(11).bg(tint(from)))
         .children(Array.from({ length: STEPS }, (_, i) => div().flex_1().h_full()
           .when(i === STEPS - 1, (el) => el.rounded_r(11))
@@ -883,8 +901,8 @@ export default class Agents extends View {
             cx.notify();
           });
         })
-        .when(on, (el) => el.bg(tint(0.55)))
-        .when(!on, (el) => el.child(band))
+        .child(band)
+        .child(solid)
         .when(dragging && this.over === g.space, (el) => el.child(div().absolute().left(0).right(0).h(2).bg(t.accent)
           .when(order.indexOf(this.pressed) < order.indexOf(g.space), (line) => line.bottom(0))
           .when(order.indexOf(this.pressed) > order.indexOf(g.space), (line) => line.top(0))))
@@ -955,11 +973,15 @@ export default class Agents extends View {
           .when((Boolean(g.pic) || g.id === "archive" || g.id.endsWith(":archive")) && top && top !== "idle", (el) => el.child(this.status(t, { status: top }, true)))
           .child(svg("mods/workspace-chrome/chevron-right.svg").size(11).flex_none().text_color(t.dim)));
     };
-    const groupRows = (g) => {
-      if (g.parent && this.isFolded(g.parent)) return [];
+    // inCard: a section of a space card is built even while the card is folded, so the
+    // card can fold it away (and back) smoothly.
+    const groupRows = (g, inCard = false) => {
+      if (!inCard && g.parent && this.isFolded(g.parent)) return [];
       if (g.headerOnly) return [spaceHeader(g)];
-      if (this.isFolded(g.id)) return [header(g)];
-      return [header(g), ...(g.terms ? g.members.map((it) => this.termRow(t, it)) : g.members.flatMap(withKids))];
+      // A section in a card: 8 px above a 22 px label.
+      const head = tall(header(g), 30);
+      if (this.isFolded(g.id)) return [head];
+      return [head, ...(g.terms ? g.members.map((it) => tall(this.termRow(t, it), 28)) : g.members.flatMap(withKids))];
     };
     // By space and status: the space's header, then its sections indented to the right
     // of a thread in the space's color that runs down from under its picture.
@@ -971,8 +993,9 @@ export default class Agents extends View {
           out.push((card = { card: true, id: g.id, space: g.space, head: groupRows(g), items: [] }));
           continue;
         }
-        const rowsOf = groupRows(g);
-        if (card && g.parent === card.id) card.items.push(...rowsOf);
+        const mine = Boolean(card && g.parent === card.id);
+        const rowsOf = groupRows(g, mine);
+        if (mine) card.items.push(...rowsOf);
         else out.push(...rowsOf);
       }
       // Other machines' spaces go to the very top, under their machine's name, and only
@@ -985,10 +1008,18 @@ export default class Agents extends View {
         : c.card === true
         ? v_flex().id(`space-${c.id}`).flex_none().mt(i && typeof shown[i - 1] !== "string" ? 12 : 2)
           .children(c.head)
-          .when(c.items.length > 0, (el) => el.child(
-            // The picture is 26 px wide at 10 px in: the 2 px thread runs under its middle.
-            v_flex().flex_none().ml(19).pl(9).pt(2).border_l(2)
-              .border_color(spaceHex(c.space) + (c.space === activeSpace ? "bf" : "73")).children(c.items)))
+          .when(c.items.length > 0, (el) => {
+            // The picture is 26 px wide at 7 px in: the 2 px thread runs under its middle.
+            const body = v_flex().flex_none().ml(19).pl(9).pt(2).border_l(2)
+              .border_color(spaceHex(c.space) + (c.space === activeSpace ? "bf" : "73")).children(c.items);
+            // Folding slides the body's height to 0 and back. Every row's height is known,
+            // else (a row without one) it opens and closes without the slide.
+            const h = c.items.every((r) => typeof r._h === "number") ? 2 + c.items.reduce((n, r) => n + r._h, 0) : null;
+            const open = !this.isFolded(c.id);
+            if (h === null) return open ? el.child(body) : el;
+            return el.child(div().id(`body-${c.id}`).flex_none().overflow_hidden().h(open ? h : 0)
+              .transition("height", { duration: 240, easing: "ease-in-out" }).child(body));
+          })
         : c));
     };
     // The rail: the spaces first (their picture, else their number), then the agents.
