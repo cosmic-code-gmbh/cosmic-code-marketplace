@@ -2,29 +2,28 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 
 import type { PlanStatus } from '../types'
 import {
-  addNote,
+  DEFAULT_GRIFFE,
+  addGriff,
   ago,
   applyUpdate,
+  artifactKind,
   asksUser,
   describeBoard,
-  describeNotes,
+  fillPlan,
   findingsText,
+  hostOf,
   fromDialog,
   isCovered,
   isPlanPath,
   keepBoard,
   newIntents,
   nextSteps,
-  noticesFor,
   parseHeaders,
   pipeline,
   planOf,
   questionsIn,
-  sortNotes,
   stageOf,
-  stillDue,
   summarize,
-  toggleNote,
 } from '../hooks/register'
 
 const SURFACES = ['terminal', 'desktop'] as const
@@ -95,9 +94,9 @@ describe('board', () => {
     let board = applyUpdate(EMPTY, {
       topic: { title: ' Stripe-Abgleich ', summary: 'Webhooks fehlen noch.', points: ['a', ' ', 'b', 'c', 'd', 'e', 'f'] },
     })
-    expect(board.topic).toEqual({ title: 'Stripe-Abgleich', summary: 'Webhooks fehlen noch.', points: ['a', 'b', 'c', 'd', 'e'] })
+    expect(board.topic).toMatchObject({ title: 'Stripe-Abgleich', summary: 'Webhooks fehlen noch.', points: ['a', 'b', 'c', 'd', 'e'] })
     board = applyUpdate(board, { topic: { title: 'Neu', summary: 'Anders.' } })
-    expect(board.topic).toEqual({ title: 'Neu', summary: 'Anders.', points: [] })
+    expect(board.topic).toMatchObject({ title: 'Neu', summary: 'Anders.', points: [] })
     expect(applyUpdate(board, { add_todos: ['x'] }).topic?.title).toBe('Neu')
   })
 
@@ -113,10 +112,10 @@ describe('board', () => {
 
   test('todos and decisions work by id; clear_done drops finished todos', () => {
     let board = applyUpdate(EMPTY, { add_todos: ['Write', 'Test', 'Drop'], open_decisions: ['Ship?'] })
-    board = applyUpdate(board, { done_todos: ['t1'], remove_todos: ['t3'], start_todo: 't2', decide: [{ id: 'd1', answer: 'yes' }] })
+    board = applyUpdate(board, { done_todos: ['t1'], remove_todos: ['t3'], start_todo: 't2', decide: [{ id: 'd1', answer: 'yes' }] }, 9)
     expect(board.todos).toEqual([
       { id: 't1', text: 'Write', isDone: true, isActive: false },
-      { id: 't2', text: 'Test', isDone: false, isActive: true },
+      { id: 't2', text: 'Test', isDone: false, isActive: true, startedAt: 9 },
     ])
     expect(board.decisions).toEqual([])
     expect(applyUpdate(board, { clear_done: true }).todos.map(t => t.id)).toEqual(['t2'])
@@ -208,25 +207,61 @@ describe('questions in a reply', () => {
   })
 })
 
-describe('own notes', () => {
-  test('notes are added, ticked off, sorted open first and shown to Claude read-only', () => {
-    let list = addNote([], '  Kunde anrufen ', 1)
-    list = addNote(list, '', 2)
-    list = addNote(list, 'Mail an Tim', 3)
-    expect(list.map(n => n.text)).toEqual(['Kunde anrufen', 'Mail an Tim'])
-    list = toggleNote(list, list[0]!.id)
-    expect(sortNotes(list).map(n => n.text)).toEqual(['Mail an Tim', 'Kunde anrufen'])
-    expect(describeNotes(list)).toContain('[x] Kunde anrufen')
-    expect(describeNotes(list)).toContain('never change them')
+describe('griffe', () => {
+  test('a typed prompt becomes a Griff once, its label shortened; {plan} takes the open plan', () => {
+    let list = addGriff([], '  /simplify ')
+    list = addGriff(list, '/simplify')
+    list = addGriff(list, '')
+    list = addGriff(list, 'Lies die verify-Datei und schließe die Lücken im Rahmen des Plans.')
+    expect(list.map(g => g.label)).toEqual(['/simplify', 'Lies die verify-Datei und…'])
+    expect(addGriff([], 'x', 'Eigener Name')[0]).toEqual({ label: 'Eigener Name', text: 'x' })
+    expect(fillPlan('sol loop verify {plan}', '.claude/plans/a.md')).toBe('sol loop verify .claude/plans/a.md')
+    expect(fillPlan('sol loop verify {plan}', null)).toBe('sol loop verify {plan}')
+    expect(DEFAULT_GRIFFE.map(g => g.label)).toContain('Plan komplett umsetzen')
+  })
+})
+
+describe('board details', () => {
+  test('a new topic title starts a new topic and keeps the old one in the trail; a new summary keeps the time', () => {
+    let board = applyUpdate(EMPTY, { topic: { title: 'A', summary: 's' } }, 100)
+    board = applyUpdate(board, { topic: { title: 'A', summary: 'anders' } }, 200)
+    expect(board.topic).toMatchObject({ title: 'A', summary: 'anders', at: 100 })
+    board = applyUpdate(board, { topic: { title: 'B', summary: 's' } }, 300)
+    expect(board.topic?.at).toBe(300)
+    expect(board.trail).toEqual([{ title: 'A', at: 100 }])
+  })
+
+  test('starting a todo stamps when; it keeps the stamp while it stays active', () => {
+    let board = applyUpdate(EMPTY, { add_todos: ['a', 'b'] }, 1)
+    board = applyUpdate(board, { start_todo: 't1' }, 50)
+    board = applyUpdate(board, { start_todo: 't1' }, 90)
+    expect(board.todos[0]).toMatchObject({ isActive: true, startedAt: 50 })
+    board = applyUpdate(board, { start_todo: 't2' }, 120)
+    expect(board.todos.map(t => [t.isActive, t.startedAt])).toEqual([[false, 50], [true, 120]])
+  })
+
+  test('options may carry a note on what they do', () => {
+    const board = applyUpdate(EMPTY, { open_decisions: [{ question: 'Jetzt?', options: [{ label: 'Ja', note: 'startet sofort' }, 'Nein'] }] }, 1)
+    expect(board.decisions[0]).toMatchObject({ options: ['Ja', 'Nein'], notes: ['startet sofort', ''] })
+    const { decisions } = fromDialog([], [{ question: 'Editor?', options: [{ label: 'Zed', description: 'schnell' }, { label: 'VS Code' }] }], 2)
+    expect(decisions[0]).toMatchObject({ options: ['Zed', 'VS Code'], notes: ['schnell', ''] })
+  })
+
+  test('artifacts are told apart by their URL', () => {
+    expect(artifactKind('https://claude.ai/artifact/abc').kind).toBe('artifact')
+    expect(artifactKind('https://github.com/o/r/pull/412').kind).toBe('pr')
+    expect(artifactKind('https://example.com/doc').kind).toBe('doc')
+    expect(hostOf('https://github.com/o/published/pull/412')).toBe('github · published #412')
+    expect(hostOf('https://www.claude.ai/artifact/x')).toBe('claude.ai')
   })
 })
 
 describe('decision log', () => {
   test('a decided question moves into the log with its answer', () => {
-    let board = applyUpdate(EMPTY, { open_decisions: ['Staging zuerst?', 'Welcher Editor?'] })
+    let board = applyUpdate(EMPTY, { open_decisions: ['Staging zuerst?', 'Welcher Editor?'] }, 400)
     board = applyUpdate(board, { decide: [{ id: 'd1', answer: ' ja, erst Staging ' }] }, 1000)
     expect(board.decisions.map(d => d.text)).toEqual(['Welcher Editor?'])
-    expect(board.log).toEqual([{ text: 'Staging zuerst?', answer: 'ja, erst Staging', at: 1000 }])
+    expect(board.log).toEqual([{ text: 'Staging zuerst?', answer: 'ja, erst Staging', at: 1000, openedAt: 400 }])
     expect(describeBoard(board)).toContain('Decided: Staging zuerst? → ja, erst Staging')
   })
 
@@ -236,23 +271,6 @@ describe('decision log', () => {
     expect(ago(3 * 3_600_000)).toBe('vor 3 h')
     expect(ago(26 * 3_600_000)).toBe('vor 1 Tag')
     expect(ago(72 * 3_600_000)).toBe('vor 3 Tagen')
-  })
-})
-
-describe('plan notices', () => {
-  const base = status({ hasReview: true, latestReview: 1, integratedReview: 1 })
-  test('a new review and a new verify result are news; a first sighting is not', () => {
-    expect(noticesFor([], [base], 1)).toEqual([])
-    expect(noticesFor([base], [{ ...base, latestReview: 2 }], 1).map(n => [n.kind, n.label])).toEqual([['review', 'Review #2 zu x ist da']])
-    const gaps = { ...base, hasVerify: true, verifiedVersion: 1, verifyResult: 'Lücken' as const }
-    expect(noticesFor([base], [gaps], 1).map(n => n.kind)).toEqual(['gaps'])
-    expect(noticesFor([gaps], [{ ...gaps, verifyResult: 'vollständig' as const }], 1).map(n => n.kind)).toEqual(['verified'])
-  })
-
-  test('a notice goes once its step is done', () => {
-    const review = { path: '/r/docs/x.md', name: 'x', kind: 'review' as const, label: '', at: 1 }
-    expect(stillDue(review, [{ ...base, latestReview: 2 }])).toBe(true)
-    expect(stillDue(review, [{ ...base, latestReview: 2, integratedReview: 2 }])).toBe(false)
   })
 })
 
@@ -324,7 +342,7 @@ describe('plan workflow', () => {
 })
 
 describe('session', () => {
-  test('the tool fills the pane with a topic card, questions and todos', async ($, on) => {
+  test('the pane reads head, Jetzt, questions and todos in that order', async ($, on) => {
     on('ui.open', () => ({ value: { isPlaced: true } }))
     on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'hi', scope: 'shared' }] }))
     await $.tool.call({
@@ -338,59 +356,58 @@ describe('session', () => {
     for (const surface of SURFACES) {
       const ui = await $.ui.mount({ ...PANE, surface })
       const all = await texts(ui)
-      if (surface === 'terminal') expect(all).toContain('◎')
-      else expect((await ui.find({ type: 'Svg' }))?.props.alt).toBe('Thema')
+      expect((await ui.find({ type: 'Text', text: 'Payment v3 fertigstellen' }))?.props.bold).toBe(true)
       expect((await ui.find({ type: 'Text', text: 'Payment v3' }))?.props.bold).toBe(true)
-      expect(all).toContain('WORUM ES GEHT')
-      expect(all).toContain('Checkout und Webhooks für Stripe produktionsreif machen.')
-      // The anchor comes before the current step, and the open question right after it
-      expect(all.indexOf('Payment v3 fertigstellen')).toBeLessThan(all.indexOf('AKTUELL'))
-      expect(all.indexOf('AKTUELL')).toBeLessThan(all.indexOf('OFFENE FRAGEN'))
+      expect(all.indexOf('Payment v3 fertigstellen')).toBeLessThan(all.indexOf('JETZT'))
+      expect(all.indexOf('JETZT')).toBeLessThan(all.indexOf('FRAGEN'))
+      expect(all.indexOf('FRAGEN')).toBeLessThan(all.indexOf('TODOS'))
       expect(all).toContain('Checkout läuft, Rückgabeseite fertig.')
       expect(all).toContain('Stripe Sandbox')
-      expect(all).toContain('◆')
+      expect(all).toContain('◆ WICHTIG')
       expect(all).toContain('Staging zuerst?')
+      // Every todo stays; the bar and the count ride in the header
+      expect(all).toContain('Webhook testen')
       expect(all).toContain('Deploy')
-      expect(all).toContain('✓ 1 erledigt')
-      expect(all).toContain('TODOS')
       expect(all).toContain('1/2')
       expect(all).toContain('▰▰▰▰▰')
-      expect(all).not.toContain('Webhook testen')
-      // No plan tracked and not in plan mode: no workflow section
-      expect(all).not.toContain('PLAN-WORKFLOW')
+      expect(all).toContain('seit')
+      expect(all).not.toContain('PLÄNE')
       await ui.unmount()
     }
     const { sections } = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] })
     expect(sections.at(-1)?.text).toContain('Thread: Payment v3 fertigstellen')
     expect(sections.at(-1)?.text).toContain('Topic: Payment v3')
-    expect(sections.at(-1)?.text).not.toContain('Weitermachen')
     // A thread rewrite without why is refused and says so
     const refused = await $.tool.call({ tool: TOOL, thread: { title: 'Anderes', goal: 'x' } })
     expect('result' in refused && refused.result).toContain('Thread unchanged')
   })
 
-  test('questions are grouped by weight with context and options; an option fills the answer', async ($, on) => {
+  test('questions come blocking first, one row per answer with its note; an answer fills the prompt box', async ($, on) => {
     on('ui.open', () => ({ value: { isPlaced: true } }))
     const { filled, sent } = promptBox(on)
     await $.tool.call({
       tool: TOOL,
       open_decisions: [
         { question: 'Welche Farbe?', weight: 'optional' },
-        { question: 'Staging zuerst?', context: 'Prod-Deploy hängt daran.', options: ['Ja', 'Nein'], recommended: 'Ja', weight: 'blocking' },
+        {
+          question: 'Staging zuerst?',
+          context: 'Prod-Deploy hängt daran.',
+          options: [{ label: 'Ja', note: 'erst Staging, dann Prod' }, 'Nein'],
+          recommended: 'Ja',
+          weight: 'blocking',
+        },
       ],
     })
     for (const surface of SURFACES) {
       const ui = await $.ui.mount({ ...PANE, surface })
       const all = await texts(ui)
-      expect(all).toContain('2 · 1 blockiert')
-      expect(all).toContain('Blockiert die Arbeit')
+      expect(all).toContain('● BLOCKIERT')
       expect(all).toContain('Prod-Deploy hängt daran.')
-      // Blocking first, optional last
+      expect(all).toContain('erst Staging, dann Prod')
+      expect(all).toContain('Empfohlen')
       expect(all.indexOf('Staging zuerst?')).toBeLessThan(all.indexOf('Welche Farbe?'))
       const buttons = (await ui.findAll({ type: 'Button' })).map(b => b.props.label)
-      expect(buttons).toContain('Ja ★')
-      expect(buttons).toContain('✦ Erklär mir das')
-      expect(buttons).toContain('× verwerfen')
+      expect(buttons).toEqual(expect.arrayContaining(['Ja', 'Nein', 'Eigene Antwort', 'Erklären']))
       await ui.unmount()
     }
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
@@ -399,10 +416,6 @@ describe('session', () => {
     await ui.press({ key: 'explain:d2' })
     expect(sent.at(-1)).toContain('Erklär mir die offene Frage d2')
     expect(sent.at(-1)).toContain('edit_decisions')
-    await ui.press({ key: 'drop:d1' })
-    const after = await texts(ui)
-    expect(after).toContain('verworfen')
-    expect(after).not.toContain('Blockiert die Arbeit')
   })
 
   test("a dialog's questions land on the board and close with the answers", async ($, on) => {
@@ -418,10 +431,9 @@ describe('session', () => {
     await $.tool.call({ tool: 'AskUserQuestion', questions })
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     const all = await texts(ui)
-    // Answered: in the log; unanswered: still open
-    expect(all).toContain('ENTSCHIEDEN')
-    expect(all).toContain('Ja')
-    expect(all).toContain('OFFENE FRAGEN')
+    // Answered: gone from the pane; unanswered: still open
+    expect(all).not.toContain('Staging zuerst?')
+    expect(all).toContain('FRAGEN')
     expect(all).toContain('Welcher Editor?')
     // A dismissed dialog leaves its questions on the board, without doubling them
     isDismissed = true
@@ -429,10 +441,9 @@ describe('session', () => {
     expect((await texts(ui)).split('Welcher Editor?').length - 1).toBe(1)
   })
 
-  test('a tracked plan shows its step, review, next steps and links its files', async ($, on) => {
+  test('plans show as a file tree with versions; artifacts with their kind and host', async ($, on) => {
     on('ui.open', () => ({ value: { isPlaced: true } }))
     on('session.cwd', () => ({ value: '/r' }))
-    const { filled } = promptBox(on)
     files(on, {
       '/r/.claude/plans/stripe.md': 'Plan Version #2\n…\nPlan Version #2 — Review #1 eingearbeitet\n',
       '/r/.claude/plans/stripe.review.md': 'Review Version #1\nReview Version #2\nGeprüft gegen Plan Version #2 · GPT Sol (sol-plan, Runde 1)\n- [kritisch] x\n',
@@ -441,36 +452,29 @@ describe('session', () => {
     for (const surface of SURFACES) {
       const ui = await $.ui.mount({ ...PANE, surface })
       const all = await texts(ui)
-      expect(all).toContain('PLAN-WORKFLOW')
-      expect(all).toContain('stripe')
-      expect(all).toContain('●●◉○○')
-      expect(all).toContain('3/5 Einarbeiten: Review #2 einarbeiten')
-      expect(all).toContain('Review #2 · Sol, Runde 1 · gegen v2 · 1 kritisch')
+      expect(all).toContain('PLÄNE')
+      expect(all).toContain('v2')
+      expect(all).toContain('#2 · gegen v2')
       expect(all).toContain('ARTEFAKTE')
+      expect(all).toContain('claude.ai')
       expect((await ui.findAll({ type: 'Link' })).map(l => [l.props.label, l.props.href])).toContainEqual(['Checkout-Mockup', 'https://claude.ai/artifact/abc'])
       const hrefs = (await ui.findAll({ type: 'Link' })).map(l => l.props.href)
       const buttons = (await ui.findAll({ type: 'Button' })).map(b => b.props.label)
-      expect(buttons).toContain('Einarbeiten')
-      expect(buttons).toContain('Sol-Loop')
       if (surface === 'terminal') {
         expect(hrefs).toContain('file:///r/.claude/plans/stripe.md')
         expect(hrefs).toContain('file:///r/.claude/plans/stripe.review.md')
       } else {
         // The desktop draws no file:// link: a button opens the file instead
-        expect(buttons).toContain('Plan v2')
-        expect(buttons).toContain('Review #2')
+        expect(buttons).toContain('stripe.md')
+        expect(buttons).toContain('review.md')
       }
-      // No verify file yet: plain text, nothing to open
-      expect(buttons).not.toContain('Verify')
-      expect(hrefs).not.toContain('file:///r/.claude/plans/stripe.verify.md')
+      // No verify file yet: no row for it
+      expect(all).not.toContain('verify.md')
       await ui.unmount()
     }
-    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    await ui.press({ key: 'step:sol-plan:/r/.claude/plans/stripe.md' })
-    expect(filled.at(-1)).toBe('sol loop plan .claude/plans/stripe.md')
   })
 
-  test('a finished plan folds into one line', async ($, on) => {
+  test('a finished plan shows its verify file with the result', async ($, on) => {
     on('ui.open', () => ({ value: { isPlaced: true } }))
     files(on, {
       '/r/docs/x.md': 'Plan Version #2\nPlan Version #2 — Review #1 eingearbeitet\n',
@@ -479,8 +483,8 @@ describe('session', () => {
     })
     await $.tool.call({ tool: TOOL, track_plans: ['/r/docs/x.md'] })
     const all = await texts(await $.ui.mount({ ...PANE, surface: 'terminal' }))
-    expect(all).toContain('v2 · vollständig verifiziert')
-    expect(all).not.toContain('●●●●●')
+    expect(all).toContain('verify.md')
+    expect(all).toContain('v2 · vollständig')
   })
 
   test('a desktop click opens the plan file with open', async ($, on) => {
@@ -497,36 +501,23 @@ describe('session', () => {
     expect(ran.filter(argv => argv[0] === 'open')).toEqual([['open', '/r/docs/x.md']])
   })
 
-  test('plan mode shows in the pane before any plan is saved', async ($, on) => {
-    on('ui.open', () => ({ value: { isPlaced: true } }))
-    on('classic.UserPromptSubmit', () => ({}))
-    await $.classic.UserPromptSubmit({ prompt: 'Lass uns das planen', permission_mode: 'plan' })
-    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    const all = await texts(ui)
-    expect(all).toContain('◉ Planmodus')
-    expect(all).toContain('Wir planen gerade')
-  })
-
-  test('reply puts the question in the prompt box; ask has Claude put it to the person', async ($, on) => {
+  test('reply puts the question in the prompt box; "alle beantworten" has Claude ask them all', async ($, on) => {
     on('ui.open', () => ({ value: { isPlaced: true } }))
     const { filled, sent } = promptBox(on)
     await $.tool.call({ tool: TOOL, open_decisions: ['Staging zuerst?', { question: 'Welcher Editor?', options: ['VS Code', 'Zed'] }] })
     for (const surface of SURFACES) {
       const ui = await $.ui.mount({ ...PANE, surface })
       const buttons = (await ui.findAll({ type: 'Button' })).map(b => b.props.label)
-      expect(buttons).toContain('↩ Antworten')
-      expect(buttons).toContain('? Frag mich')
-      expect(buttons).toContain(' Alle stellen')
+      expect(buttons).toContain('Eigene Antwort')
+      expect(buttons).toContain(' alle beantworten →')
       await ui.unmount()
     }
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     await ui.press({ key: 'reply:d1' })
     expect(filled).toEqual(['Zu „Staging zuerst?“: '])
-    await ui.press({ key: 'ask:d2' })
-    expect(sent.at(-1)).toContain('d2: Welcher Editor? (Optionen: VS Code / Zed)')
-    expect(sent.at(-1)).toContain('AskUserQuestion')
     await ui.press({ key: 'ask-all' })
-    expect(sent.at(-1)).toContain('d1: Staging zuerst?\nd2: Welcher Editor?')
+    expect(sent.at(-1)).toContain('d1: Staging zuerst?\nd2: Welcher Editor? (Optionen: VS Code / Zed)')
+    expect(sent.at(-1)).toContain('AskUserQuestion')
   })
 
   test('where the box cannot take the reply, Claude asks instead', async ($, on) => {
@@ -543,69 +534,6 @@ describe('session', () => {
     const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
     await ui.press({ key: 'reply:d1' })
     expect(sent.at(-1)).toContain('d1: Staging zuerst?')
-  })
-
-  test('a review that lands outside the session shows a notice whose button fills the integrate command', async ($, on) => {
-    on('ui.open', () => ({ value: { isPlaced: true } }))
-    on('session.cwd', () => ({ value: '/r' }))
-    const { filled } = promptBox(on)
-    const tree: Record<string, string> = {
-      '/r/docs/x.md': 'Plan Version #1\nPlan Version #1 — Review #1 eingearbeitet\n',
-      '/r/docs/x.review.md': 'Review Version #1\n',
-    }
-    files(on, tree)
-    await $.tool.call({ tool: TOOL, track_plans: ['/r/docs/x.md'] })
-    // Codex writes review #2 outside the session; the next read sees it
-    tree['/r/docs/x.review.md'] = 'Review Version #1\nReview Version #2\n'
-    await $.tool.call({ tool: TOOL })
-    for (const surface of SURFACES) {
-      const ui = await $.ui.mount({ ...PANE, surface })
-      expect(await texts(ui)).toContain('Review #2 zu x ist da')
-      await ui.unmount()
-    }
-    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    await ui.press({ key: 'act:review/r/docs/x.md' })
-    expect(filled).toEqual(['/workflow:plan-integrate-review docs/x.md'])
-    expect(await texts(ui)).not.toContain('Review #2 zu x ist da')
-  })
-
-  test('a review this session writes itself (a sol loop) raises no notice', async ($, on) => {
-    on('ui.open', () => ({ value: { isPlaced: true } }))
-    on('ui.toast', () => ({ value: undefined }))
-    on('session.cwd', () => ({ value: '/r' }))
-    const tree: Record<string, string> = {
-      '/r/.claude/plans/x.md': 'Plan Version #1\nPlan Version #1 — Review #1 eingearbeitet\n',
-      '/r/.claude/plans/x.review.md': 'Review Version #1\n',
-    }
-    files(on, tree)
-    on('tool.call', (_$: unknown, e: { tool: string; file_path?: string; content?: string }) => {
-      if (e.tool === 'Write' && e.file_path) tree[e.file_path] = e.content ?? ''
-      return { result: {} }
-    })
-    await $.tool.call({ tool: TOOL, track_plans: ['/r/.claude/plans/x.md'] })
-    await $.tool.call({ tool: 'Write', file_path: '/r/.claude/plans/x.review.md', content: 'Review Version #2\n' })
-    const all = await texts(await $.ui.mount({ ...PANE, surface: 'terminal' }))
-    expect(all).not.toContain('ist da')
-    expect(all).toContain('Review #2 einarbeiten')
-  })
-
-  test('the log shows the latest answer folded and all of them open', async ($, on) => {
-    on('ui.open', () => ({ value: { isPlaced: true } }))
-    await $.tool.call({ tool: TOOL, open_decisions: ['Staging zuerst?', 'Welcher Editor?'] })
-    await $.tool.call({ tool: TOOL, decide: [{ id: 'd1', answer: 'ja' }] })
-    await $.tool.call({ tool: TOOL, decide: [{ id: 'd2', answer: 'VS Code' }] })
-    for (const surface of SURFACES) {
-      const ui = await $.ui.mount({ ...PANE, surface })
-      const all = await texts(ui)
-      expect(all).toContain('ENTSCHIEDEN')
-      expect(all).toContain('Welcher Editor?')
-      expect(all).toContain('VS Code')
-      expect(all).not.toContain('Staging zuerst?')
-      await ui.press({ key: 'toggle-log' })
-      expect(await texts(ui)).toContain('Staging zuerst?')
-      await ui.press({ key: 'toggle-log' })
-      await ui.unmount()
-    }
   })
 
   const git = (on: any) => {
@@ -629,41 +557,30 @@ describe('session', () => {
     on('store.get', (_$: unknown, e: { key: string }) => ({ value: store[e.key] }))
   }
 
-  test('own notes are kept per repository and branch; the board itself is not', async ($, on) => {
+  test('Griffe are one list across sessions: added in the pane, kept in the store, put in the prompt box', async ($, on) => {
     on('ui.open', () => ({ value: { isPlaced: true } }))
-    git(on)
-    const store: Record<string, unknown> = {}
+    const store: Record<string, unknown> = { griffe: [{ label: 'Simplify', text: '/simplify' }] }
     memoryStore(on, store)
-    await $.tool.call({ tool: TOOL, thread: { title: 'Payment v3', goal: 'Stripe fertig.' } })
+    engineStart(on)
+    on('prompt.compose', () => ({ sections: [] }))
+    const box = promptBox(on)
+    await $.session.start({ cwd: '/r', surface: 'terminal', isInteractive: true })
     const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-    await ui.input({ key: 'note-input-0', text: 'Kunde anrufen' })
-    expect(store['board:/r:feature/pay']).toMatchObject({ notes: [{ text: 'Kunde anrufen', isDone: false }] })
-    expect(JSON.stringify(store)).not.toContain('Payment v3')
+    await ui.press({ key: 'griff:0' })
+    expect(box.filled).toEqual(['/simplify'])
+    await ui.input({ key: 'griff-input-1', text: 'sol loop verify {plan}' })
+    expect(store.griffe).toEqual([{ label: 'Simplify', text: '/simplify' }, { label: 'sol loop verify {plan}', text: 'sol loop verify {plan}' }])
   })
 
-  test('a new session brings the notes back, offers no earlier board, and asks nothing', async ($, on) => {
+  test('a first session gets the default Griffe and no earlier board', async ($, on) => {
     on('ui.open', () => ({ value: { isPlaced: true } }))
-    git(on)
-    // A board saved by an earlier version: its notes come back, the rest stays behind
-    const store: Record<string, unknown> = {
-      'board:/r:feature/pay': {
-        branch: 'feature/pay',
-        savedAt: Date.now(),
-        board: { thread: { title: 'Payment v3', goal: 'Stripe fertig.' }, topic: null, todos: [], decisions: [], artifacts: [], log: [] },
-        plans: [],
-        notes: [{ id: 'n1', text: 'Kunde anrufen', isDone: false, at: 1 }],
-      },
-    }
-    memoryStore(on, store)
+    memoryStore(on, {})
     engineStart(on)
     on('prompt.compose', () => ({ sections: [] }))
     await $.session.start({ cwd: '/r', surface: 'terminal', isInteractive: true })
     const all = await texts(await $.ui.mount({ ...PANE, surface: 'terminal' }))
-    expect(all).toContain('Kunde anrufen')
-    expect(all).not.toContain('Weitermachen')
-    expect(all).not.toContain('Payment v3')
-    const { sections } = await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] })
-    expect(sections.at(-1)?.text).not.toContain('Weitermachen')
+    expect(all).toContain('GRIFFE')
+    expect(all).toContain('Noch kein Thema')
   })
 
   test('the terminal frames the board and draws each rule to the exact width', async ($, on) => {
@@ -674,9 +591,9 @@ describe('session', () => {
     expect(root?.props.borderStyle).toBe('round')
     // The frame fills the pane's height
     expect(root?.props.minHeight).toBe(60)
-    // bodyColumns 52 → inner 48; "WORUM ES GEHT " is 14 cells, so the rule is 34
+    // bodyColumns 52 → inner 48; "GRIFFE " is 7 cells, so the rule is 41
     const rule = (await ui.findAll({ type: 'Text' })).map(t => t.text).find(t => /^─+$/.test(t))
-    expect(rule?.length).toBe(34)
+    expect(rule?.length).toBe(41)
     const desktop = await $.ui.mount({ ...PANE, surface: 'desktop' })
     expect((await desktop.find({ type: 'Box' }))?.props.borderStyle).toBeUndefined()
   })
@@ -687,18 +604,21 @@ describe('session', () => {
     expect(all).toContain('Noch kein Thema')
     // The placeholder is a plain line, not a frame inside the frame
     expect((await ui.findAll({ type: 'Box' })).filter(b => b.props.borderStyle).length).toBe(1)
-    // Empty questions and todos collapse into one quiet line
-    expect(all).toContain('Keine offenen Fragen, keine Todos.')
     expect(all).not.toContain('TODOS')
+    expect(all).not.toContain('FRAGEN')
   })
 
-  test('the clear button drops finished todos', async ($, on) => {
+  test('finished todos can be hidden and shown again', async ($, on) => {
     on('ui.open', () => ({ value: { isPlaced: true } }))
-    await $.tool.call({ tool: TOOL, add_todos: ['a', 'b'] })
+    await $.tool.call({ tool: TOOL, add_todos: ['Alt', 'Neu'] })
     await $.tool.call({ tool: TOOL, done_todos: ['t1'] })
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    await ui.press({ key: 'clear-done' })
-    expect(await texts(ui)).not.toContain('erledigt')
+    expect(await texts(ui)).toContain('Alt')
+    await ui.press({ key: 'toggle-done' })
+    expect(await texts(ui)).not.toContain('Alt')
+    expect((await ui.findAll({ type: 'Button' })).map(b => b.props.label)).toContain('1 erledigte einblenden')
+    await ui.press({ key: 'toggle-done' })
+    expect(await texts(ui)).toContain('Alt')
   })
 
   test('a question left only in the reply sends Claude back once, even with older questions open', async ($, on) => {
@@ -736,7 +656,7 @@ describe('footer switch', () => {
 
 describe('herdr sidebar', () => {
   test('clicks are read once, oldest first, and junk lines are skipped', () => {
-    const text = ['{"at":5,"do":"refresh"}', 'kaputt', '{"at":3,"do":"note.add","text":"a"}', '{"at":1,"do":"refresh"}', '{"do":"refresh"}'].join('\n')
+    const text = ['{"at":5,"do":"refresh"}', 'kaputt', '{"at":3,"do":"griff.add","text":"a"}', '{"at":1,"do":"refresh"}', '{"do":"refresh"}'].join('\n')
     expect(newIntents(text, 2).map(x => x.at)).toEqual([3, 5])
     expect(newIntents(text, 5)).toEqual([])
   })
@@ -789,16 +709,16 @@ describe('herdr sidebar', () => {
     expect(s.ran.some(a => a.includes('layout.select'))).toBe(true)
   })
 
-  test('a click on an option fills the prompt box; a note from the sidebar lands on the board', async ($, on) => {
+  test('a click on an option fills the prompt box; a Griff from the sidebar lands in the list', async ($, on) => {
     const s = await herdrSession($, on)
     await $.tool.call({ tool: TOOL, open_decisions: [{ question: 'Tab?', options: ['Ja', 'Nein'] }] })
     const at = Date.now() + 10
     s.tree['/h/.local/state/fokusboard/t9.inbox.jsonl'] =
-      JSON.stringify({ at, do: 'answer', id: 'd1', option: 'Ja' }) + '\n' + JSON.stringify({ at: at + 1, do: 'note.add', text: 'Kunde anrufen' })
+      JSON.stringify({ at, do: 'answer', id: 'd1', option: 'Ja' }) + '\n' + JSON.stringify({ at: at + 1, do: 'griff.add', text: '/security-review' })
     await s.clock.advance(1000)
     expect(s.box.filled).toEqual(['Zu „Tab?“: Ja'])
     expect(s.box.sent).toEqual([])
-    expect(s.board().notes).toMatchObject([{ text: 'Kunde anrufen', isDone: false }])
+    expect(s.board().griffe.at(-1)).toEqual({ label: '/security-review', text: '/security-review' })
     // The same clicks are not carried out twice
     await s.clock.advance(1000)
     expect(s.box.filled).toEqual(['Zu „Tab?“: Ja'])

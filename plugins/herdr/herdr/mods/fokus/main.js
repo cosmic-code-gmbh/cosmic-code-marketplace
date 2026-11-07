@@ -5,35 +5,57 @@
 //   here ──appends {at, do, …}──► ~/.local/state/fokusboard/<terminal>.inbox.jsonl ──► fokusboard mod
 //
 // The Claude Code mod owns the board and carries out every click (fill the prompt box, ask,
-// explain …), so this view only draws and sends intents. It shows topic, questions, todos,
-// artifacts and decisions (the plan workflow and the notes stay in the terminal pane). Each
-// terminal tab shows its own session's board. Artifacts merge the board's links with this
-// session's publishes from the herdr plugin's hook (~/.local/state/herdr-artifacts/artifacts.jsonl).
+// explain, Griffe …), so this view only draws and sends intents. It shows one session, calmly:
+//
+//   thread title ··●        head: what the conversation is about, one dot per topic
+//   JETZT                   the current topic
+//   FRAGEN                  open questions, one row per answer
+//   TODOS ━━━━━━──── 3/5    every todo; finished ones can be hidden
+//   PLÄNE                   plan files as a tree: plan, review, verify with versions
+//   ARTEFAKTE               links with kind and host
+//   GRIFFE                  prompts sent again and again
+//   SESSION                 who held the ball when, sampled here from the agent's status
+//
+// No frames, no glow: sections are told apart by space and their labels. Colors come from the
+// Herdr theme the person picked in the settings; there is no picker of its own. Text sizes follow
+// the golden ratio: 10 (labels, meta) and 16 (text). Icons are the one-color "Linse" set (l-*.svg).
 
 import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex } from "gpui-base";
+import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { agents, exec, focused, home, readTextFile, theme, watchFolder, writeTextFile } from "herdr";
 
 const DIR = `${home()}/.local/state/fokusboard`;
 const ARTIFACTS = `${home()}/.local/state/herdr-artifacts/artifacts.jsonl`;
-const ICON = (name) => `mods/fokus/${name}.svg`;
-// The Claude accent the terminal board uses
-const CLAUDE = "#D97757";
+const ICON = (name) => `mods/fokus/l-${name}.svg`;
+const MONO = "Geist Mono";
+// Golden-ratio type scale: labels and meta, text
+const XS = 10;
+const S = 16;
 const KEEP_INTENTS = 30;
-
-const STATUS_WORD = { working: "arbeitet", blocked: "wartet auf dich", done: "fertig", idle: "bereit" };
+// Session sampling: how often, how far back, and when waiting on you turns into a pause
+const SAMPLE_MS = 5000;
+const WINDOW_MS = 2 * 3600_000;
+const PAUSE_AFTER_MS = 10 * 60_000;
 
 function ago(at) {
   const s = Math.max(0, Math.round((Date.now() - at) / 1000));
-  if (s < 10) return "gerade eben";
-  if (s < 60) return `vor ${s} s`;
+  if (s < 60) return "gerade eben";
   if (s < 3600) return `vor ${Math.round(s / 60)} min`;
   if (s < 86400) return `vor ${Math.round(s / 3600)} h`;
   const d = Math.round(s / 86400);
   return d === 1 ? "vor 1 Tag" : `vor ${d} Tagen`;
 }
 
-// A #rrggbb color with alpha (two hex digits), for tinted cards; other values stay as they are
+const since = (at) => (at ? ago(at).replace(/^vor /, "seit ") : "");
+
+// "1 h 05 min", "12 min"
+function span(ms) {
+  const min = Math.round(ms / 60000);
+  if (min < 60) return `${min} min`;
+  return `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, "0")} min`;
+}
+
+// A #rrggbb color with alpha (two hex digits), for tinted surfaces; other values stay as they are
 function tint(color, alpha) {
   return /^#[0-9a-f]{6}$/i.test(color ?? "") ? `${color}${alpha}` : color;
 }
@@ -44,6 +66,29 @@ function readJson(text) {
   } catch {
     return null;
   }
+}
+
+function load(key, fallback) {
+  try {
+    return readJson(localStorage.getItem(key) ?? "") ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+// What kind of link an artifact is, from its URL (mirrors fokusboard's artifactKind)
+function kindOf(href) {
+  if (/claude\.ai\/(code\/)?artifact\//.test(href)) return "artefakt";
+  if (/github\.com\/[^/]+\/[^/]+\/pull\/\d+/.test(href)) return "pr";
+  return "doc";
+}
+
+function hostOf(href) {
+  const pr = href.match(/github\.com\/[^/]+\/([^/]+)\/pull\/(\d+)/);
+  if (pr) return `github · ${pr[1]} #${pr[2]}`;
+  const m = href.match(/^[a-z]+:\/\/([^/]+)/i);
+  if (m && !href.startsWith("file:")) return m[1].replace(/^www\./, "");
+  return href.split("/").filter(Boolean).slice(-2, -1)[0] ?? href;
 }
 
 // This session's publishes: the hook lines of `terminal` from its newest Claude session
@@ -59,6 +104,31 @@ async function hookArtifacts(terminal) {
     .map((e) => ({ label: e.title, href: e.url, at: e.at }));
 }
 
+// One beat of an agent's status into its timeline: "w" Claude works, "y" the ball is with you
+function addSample(list, state, now) {
+  const last = list.at(-1);
+  if (last && last.k === state && now - last.to <= SAMPLE_MS * 3) return [...list.slice(0, -1), { ...last, to: now }];
+  return [...list, { k: state, from: now, to: now }].filter((x) => now - x.to < WINDOW_MS + 3600_000).slice(-400);
+}
+
+// The timeline as Claude / you / pause, within the last two hours: waiting on you longer than
+// ten minutes counts as a pause from then on
+function ballSegments(list, now) {
+  const start = now - WINDOW_MS;
+  const out = [];
+  for (const x of list) {
+    const from = Math.max(x.from, start);
+    if (x.to <= from) continue;
+    if (x.k === "w") out.push({ k: "C", from, to: x.to });
+    else {
+      const cut = Math.min(x.to, Math.max(from, x.from + PAUSE_AFTER_MS));
+      if (cut > from) out.push({ k: "D", from, to: cut });
+      if (x.to > cut) out.push({ k: "R", from: cut, to: x.to });
+    }
+  }
+  return out;
+}
+
 export default class Fokus extends View {
   init(_props, cx) {
     this.terminal = null; // the terminal whose board is shown
@@ -66,7 +136,18 @@ export default class Fokus extends View {
     this.board = null;
     this.published = [];
     this.hover = null;
-    this.open = readJson(localStorage.getItem("open") ?? "") ?? { log: false, done: false, thread: true };
+    this.view = load("view", { hideDone: false });
+    // Per terminal: [{k: "w"|"y", from, to}], kept across restarts of the app
+    this.timeline = load("timeline", {});
+    this.isAdding = false;
+    this.input = InputState.new({ placeholder: "Befehl, z. B. /simplify" });
+    this.input.on("submit", (_e, cx) => {
+      const text = this.input.value().trim();
+      if (text) this.send({ do: "griff.add", text });
+      this.input.set_value("");
+      this.isAdding = false;
+      cx.notify();
+    });
     cx.spawn(async (cx) => {
       await exec("mkdir", ["-p", DIR]).catch(() => null);
       await this.follow(cx);
@@ -85,8 +166,22 @@ export default class Fokus extends View {
         await this.load(cx);
       }
     });
-    // "vor 2 min" and the agent's status move on without a write
+    // "vor 2 min" moves on without a write
     cx.timer.every(15000, (cx) => cx.notify());
+    // Who holds the ball: sampled for every Claude session, drawn for the shown one (no redraw here)
+    cx.timer.every(SAMPLE_MS, () => this.sample());
+  }
+
+  sample() {
+    const now = Date.now();
+    for (const a of agents()) {
+      if (!(a.app === "claude-code" || a.program?.key === "claude")) continue;
+      const state = a.status === "working" ? "w" : "y";
+      this.timeline[a.address] = addSample(this.timeline[a.address] ?? [], state, now);
+    }
+    try {
+      localStorage.setItem("timeline", JSON.stringify(this.timeline));
+    } catch {}
   }
 
   // Follows the focused terminal: each tab shows its own session's board, or none. Only while no
@@ -124,244 +219,285 @@ export default class Fokus extends View {
     }
   }
 
-  toggle(key) {
-    this.open = { ...this.open, [key]: !this.open[key] };
-    localStorage.setItem("open", JSON.stringify(this.open));
+  setView(key, value) {
+    this.view = { ...this.view, [key]: value };
+    try {
+      localStorage.setItem("view", JSON.stringify(this.view));
+    } catch {}
   }
 
   // ── pieces ──────────────────────────────────────────────────────────────────
 
-  header(t, label, count, opts = {}) {
+  // Small mono text for labels and meta
+  meta(color, text) {
+    return div().flex_none().font_family(MONO).text_size(XS).text_color(color).child(text);
+  }
+
+  // A section label: semibold mono caps; something quiet may sit on the right
+  label(t, text, right) {
     return h_flex()
       .flex_none()
-      .pt(16)
-      .pb(6)
-      .gap(6)
+      .gap(8)
       .items_center()
-      .text_size(11)
-      .font_semibold()
-      .text_color(t.muted)
-      .when(Boolean(opts.icon), (el) => el.child(svg(ICON(opts.icon)).size(12).text_color(opts.color ?? t.dim)))
-      .child(div().child(label.toUpperCase()))
-      .when(Boolean(count), (el) => el.child(div().font_normal().text_color(opts.color ?? t.dim).child(count)))
+      .mb(10)
+      .child(div().flex_none().font_family(MONO).text_size(XS).font_semibold().text_color(t.foreground).child(text.toUpperCase()))
       .child(div().flex_1())
-      .when(Boolean(opts.action), (el) => el.child(opts.action));
+      .when(Boolean(right), (el) => el.child(right));
   }
 
-  // A small text button; `solid` draws it filled
-  button(t, id, label, onClick, opts = {}) {
-    return h_flex()
-      .id(id)
-      .h(24)
-      .px(9)
-      .gap(5)
-      .flex_none()
-      .items_center()
-      .rounded(6)
-      .text_size(12)
-      .cursor_pointer()
-      .when(Boolean(opts.solid), (el) => el.bg(opts.color ?? t.accent).text_color(t.solid_foreground ?? t.background).font_medium())
-      .when(!opts.solid, (el) =>
-        el
-          .when(!opts.quiet, (el) => el.bg(t.raised))
-          .text_color(opts.quiet ? t.dim : t.foreground)
-          .hover((s) => s.bg(t.hover).text_color(t.foreground)),
-      )
-      .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
-      .on_click((_e, cx) => {
-        cx.stop_propagation();
-        onClick();
-      })
-      .when(Boolean(opts.icon), (el) => el.child(svg(ICON(opts.icon)).size(12)))
-      .child(label);
-  }
-
-  link(t, id, label, onClick, isThere = true) {
-    if (!isThere) return div().text_color(t.dim).child(label);
+  // A quiet text link in mono
+  quiet(t, id, text, onClick) {
     return div()
       .id(id)
-      .text_color(t.muted)
-      .cursor_pointer()
-      .hover((s) => s.text_color(t.accent))
-      .on_click(() => onClick())
-      .child(label);
-  }
-
-  card(t, id, color) {
-    return v_flex()
-      .id(id)
       .flex_none()
-      .gap(6)
-      .p(12)
-      .rounded(10)
-      .bg(color ? tint(color, "26") : t.raised);
+      .font_family(MONO)
+      .text_size(XS)
+      .text_color(t.dim)
+      .cursor_pointer()
+      .hover((s) => s.text_color(t.foreground))
+      .on_click((_e, cx) => {
+        cx.stop_propagation();
+        onClick(cx);
+      })
+      .child(text);
   }
 
-  notice(t, n) {
-    const color = n.kind === "verified" ? t.ansi2 : n.kind === "gaps" ? t.blocked ?? t.ansi1 : t.ansi3;
-    return this.card(t, `notice-${n.kind}-${n.path}`, color)
-      .bg(tint(color, "18"))
-      .child(h_flex().gap(8).items_center().child(svg(ICON("flag")).size(14).text_color(color)).child(div().flex_1().font_medium().child(n.label)))
-      .child(
-        h_flex()
-          .gap(6)
-          .when(n.kind === "review", (el) => el.child(this.button(t, `act-${n.path}`, "Einarbeiten", () => this.send({ do: "notice.act", path: n.path, kind: n.kind }), { solid: true, color })))
-          .when(n.kind === "gaps", (el) => el.child(this.button(t, `act-${n.path}`, "Nachbessern", () => this.send({ do: "notice.act", path: n.path, kind: n.kind }), { solid: true, color })))
-          .child(this.button(t, `hide-${n.kind}-${n.path}`, "ausblenden", () => this.send({ do: "notice.dismiss", path: n.path, kind: n.kind }), { quiet: true })),
+  section(child) {
+    return v_flex().flex_none().pt(26).child(child);
+  }
+
+  head(t, b) {
+    const title = b.thread?.title ?? b.topic?.title ?? "";
+    const trail = b.trail ?? [];
+    const dots = [...trail.map((x) => x.title), ...(b.topic ? [b.topic.title] : [])].slice(-5);
+    return h_flex()
+      .id("head")
+      .flex_none()
+      .pt(16)
+      .gap(12)
+      .items_start()
+      .when(Boolean(b.thread?.goal), (el) => el.tooltip(b.thread.goal))
+      .child(div().flex_1().min_w(0).text_size(S).font_semibold().line_height(1.3).text_color(t.foreground).child(title))
+      .when(dots.length > 1, (el) =>
+        el.child(
+          h_flex()
+            .id("topic-dots")
+            .flex_none()
+            .pt(7)
+            .gap(4)
+            .tooltip(`${dots.length} Themen: ${dots.join(" → ")}`)
+            .children(dots.map((_, i) => div().size(6).rounded(3).bg(i === dots.length - 1 ? t.accent : t.dim))),
+        ),
       );
   }
 
-  thread(t, th) {
-    const isOpen = this.open.thread !== false;
+  now(t, tp) {
     return v_flex()
-      .id("thread")
       .flex_none()
-      .gap(4)
-      .pt(14)
-      .cursor_pointer()
-      .on_click((_e, cx) => {
-        this.toggle("thread");
-        cx.notify();
-      })
+      .pt(20)
+      .gap(8)
       .child(
         h_flex()
           .gap(6)
           .items_center()
-          .text_size(11)
-          .font_semibold()
-          .text_color(t.muted)
-          .child("WORUM ES GEHT")
+          .child(svg(ICON("jetzt")).size(14).text_color(t.accent))
+          .child(div().font_family(MONO).text_size(XS).font_semibold().text_color(t.accent).child("JETZT"))
           .child(div().flex_1())
-          .child(svg(ICON(isOpen ? "chevron-down" : "chevron-right")).size(12).text_color(t.dim)),
+          .child(this.meta(t.dim, since(tp.at))),
       )
-      .child(div().text_size(14).font_semibold().text_color(CLAUDE).child(th.title))
-      .when(isOpen, (el) => el.child(div().text_size(12.5).line_height(1.4).text_color(t.muted).child(th.goal)));
-  }
-
-  topic(t, tp) {
-    return v_flex()
-      .flex_none()
-      .mt(12)
-      .gap(8)
-      .p(14)
-      .rounded(12)
-      .bg(tint(CLAUDE, "44"))
-      .child(
-        h_flex()
-          .gap(8)
-          .items_center()
-          .child(svg(ICON("focus")).size(15).text_color(CLAUDE))
-          .child(div().text_size(10.5).font_semibold().text_color(CLAUDE).child("JETZT")),
-      )
-      .child(div().text_size(15).font_semibold().text_color(t.foreground).child(tp.title))
-      .child(div().text_size(13).line_height(1.4).text_color(t.foreground).child(tp.summary))
+      .child(div().text_size(S).font_bold().line_height(1.3).text_color(t.foreground).child(tp.title))
+      .child(div().text_size(S).line_height(1.45).text_color(t.muted).child(tp.summary))
       .when(tp.points?.length > 0, (el) =>
         el.child(
           v_flex()
-            .gap(4)
+            .gap(6)
             .pt(2)
             .children(
               tp.points.map((p) =>
                 h_flex()
-                  .gap(8)
+                  .gap(10)
                   .items_start()
-                  .child(div().mt(6).size(5).flex_none().rounded(3).bg(CLAUDE))
-                  .child(div().flex_1().text_size(12).line_height(1.4).text_color(t.muted).child(p)),
+                  .child(svg(ICON("jetzt")).mt(4).size(12).flex_none().text_color(t.accent))
+                  .child(div().flex_1().min_w(0).text_size(S).line_height(1.4).text_color(t.muted).child(p)),
               ),
             ),
         ),
       );
   }
 
-  // One open question: weight as a tag, the question and its context, the options as a list
-  // (a click puts the answer in the prompt box), and a quiet toolbar for everything else
+  // One open question: kind and age, the question and its context, one row per answer with its
+  // note (the recommended one tinted), then the quiet actions on a strip of their own
   question(t, d) {
     const weight = d.weight ?? "important";
     const tag = {
-      blocking: { label: "Blockiert", color: t.blocked ?? t.ansi1 },
-      important: { label: "Wichtig", color: t.ansi3 },
-      optional: { label: "Optional", color: t.dim },
+      blocking: { label: "Blockiert", icon: "blockiert", color: t.blocked ?? t.ansi1 },
+      important: { label: "Wichtig", icon: "wichtig", color: t.ansi3 },
+      optional: { label: "Optional", icon: "optional", color: t.dim },
     }[weight];
-    const options = [...(d.options ?? [])].sort((a, b) => (b === d.recommended) - (a === d.recommended));
-    const option = (o, i) => {
+    const isBlocking = weight === "blocking";
+    const answers = (d.options ?? []).map((o, i) => ({ o, note: d.notes?.[i] ?? "", i }));
+    const answer = ({ o, note, i }) => {
       const isRec = o === d.recommended;
-      const key = `opt-${d.id}-${i}`;
-      const hot = this.hover === key;
       return h_flex()
-        .id(key)
-        .min_h(34)
-        .px(11)
-        .py(7)
-        .gap(8)
+        .id(`opt-${d.id}-${i}`)
+        .px(12)
+        .py(10)
+        .gap(12)
         .items_center()
+        .rounded(10)
         .cursor_pointer()
-        .rounded(7)
-        .bg(isRec ? tint(CLAUDE, "44") : t.border)
-        .hover((s) => s.bg(isRec ? tint(CLAUDE, "5c") : t.hover))
-        .on_hover((h, cx) => {
-          this.hover = h ? key : this.hover === key ? null : this.hover;
-          cx.notify();
-        })
+        .bg(isRec ? tint(t.accent, "26") : t.background)
+        .hover((s) => s.bg(isRec ? tint(t.accent, "38") : t.hover))
         .on_click(() => this.send({ do: "answer", id: d.id, option: o }))
-        .child(div().flex_1().text_size(12.5).text_color(t.foreground).when(isRec, (el) => el.font_medium()).child(o))
-        .when(isRec, (el) =>
-          el.child(div().flex_none().px(6).h(18).flex().items_center().rounded(9).bg(tint(CLAUDE, "66")).text_size(10.5).font_semibold().text_color(CLAUDE).child("Empfohlen")),
+        .child(
+          v_flex()
+            .flex_1()
+            .min_w(0)
+            .gap(3)
+            .child(div().text_size(S).font_medium().line_height(1.3).text_color(t.foreground).child(o))
+            .when(Boolean(note), (el) => el.child(div().font_family(MONO).text_size(XS).line_height(1.4).text_color(t.muted).child(note))),
         )
-        .child(div().flex_none().w(14).text_size(12).text_color(hot ? t.foreground : t.dim).child(hot ? "↵" : ""));
+        .when(isRec, (el) =>
+          el.child(div().flex_none().px(8).py(4).rounded(10).bg(tint(t.accent, "33")).font_family(MONO).text_size(XS).text_color(t.accent).child("Empfohlen")),
+        );
     };
-    const tool = (id, label, icon, onClick) =>
-      h_flex()
-        .id(id)
-        .h(26)
-        .px(7)
-        .gap(5)
-        .items_center()
-        .rounded(6)
-        .cursor_pointer()
-        .text_size(11.5)
-        .text_color(t.muted)
-        .hover((s) => s.bg(t.hover).text_color(t.foreground))
-        .on_click(() => onClick())
-        .child(svg(ICON(icon)).size(12))
-        .when(Boolean(label), (el) => el.child(label));
     return v_flex()
       .id(`q-${d.id}`)
       .flex_none()
-      .rounded(10)
-      .bg(t.raised)
+      .rounded(12)
+      .bg(isBlocking ? tint(tag.color, "1a") : t.raised)
       .child(
         v_flex()
-          .gap(6)
-          .px(12)
-          .pt(11)
-          .pb(12)
+          .gap(8)
+          .px(14)
+          .pt(14)
+          .pb(answers.length ? 12 : 14)
           .child(
             h_flex()
               .gap(6)
               .items_center()
-              .child(div().size(6).rounded(3).bg(tag.color))
-              .child(div().text_size(10.5).font_semibold().text_color(tag.color).child(tag.label.toUpperCase())),
+              .child(svg(ICON(tag.icon)).size(14).text_color(tag.color))
+              .child(div().font_family(MONO).text_size(XS).font_semibold().text_color(tag.color).child(tag.label.toUpperCase()))
+              .child(div().flex_1())
+              .when(Boolean(d.at), (el) => el.child(this.meta(t.dim, ago(d.at)))),
           )
-          .child(div().text_size(13.5).font_medium().line_height(1.4).text_color(t.foreground).child(d.text))
-          .when(Boolean(d.context), (el) => el.child(div().text_size(12).line_height(1.45).text_color(t.muted).child(d.context)))
-          .when(options.length > 0, (el) =>
-            el.child(v_flex().mt(4).gap(4).children(options.map(option))),
-          )
-          .when(Boolean(d.recommended) && !d.options?.includes(d.recommended), (el) =>
-            el.child(div().text_size(12).text_color(t.muted).child(`Empfehlung: ${d.recommended}`)),
-          ),
+          .child(div().text_size(S).font_semibold().line_height(1.35).text_color(t.foreground).child(d.text))
+          .when(Boolean(d.context), (el) => el.child(div().text_size(S).line_height(1.45).text_color(t.muted).child(d.context))),
+      )
+      .when(answers.length > 0, (el) => el.child(v_flex().gap(6).px(14).pb(14).children(answers.map(answer))))
+      .when(Boolean(d.recommended) && !d.options?.includes(d.recommended), (el) =>
+        el.child(div().px(14).pb(12).text_size(S).text_color(t.muted).child(`Empfehlung: ${d.recommended}`)),
       )
       .child(
         h_flex()
-          .px(6)
-          .pb(5)
-          .gap(2)
+          .px(14)
+          .py(8)
+          .gap(16)
           .items_center()
-          .child(tool(`reply-${d.id}`, "Antworten", "reply", () => this.send({ do: "reply", id: d.id })))
-          .child(tool(`explain-${d.id}`, "Erklären", "sparkles", () => this.send({ do: "explain", id: d.id })))
-          .child(tool(`ask-${d.id}`, "Fragen", "help", () => this.send({ do: "ask", ids: [d.id] })))
-          .child(div().flex_1())
-          .child(tool(`drop-${d.id}`, "", "x", () => this.send({ do: "dismiss", id: d.id }))),
+          .bg(tint(tag.color, "14"))
+          .child(this.quiet(t, `reply-${d.id}`, "Eigene Antwort", () => this.send({ do: "reply", id: d.id })))
+          .child(this.quiet(t, `explain-${d.id}`, "Erklären", () => this.send({ do: "explain", id: d.id }))),
+      );
+  }
+
+  todos(t, list) {
+    const done = list.filter((x) => x.isDone).length;
+    const share = list.length ? done / list.length : 0;
+    const shown = this.view.hideDone ? list.filter((x) => !x.isDone) : list;
+    const busy = t.working ?? t.ansi6;
+    const row = (x) =>
+      h_flex()
+        .flex_none()
+        .gap(10)
+        .px(8)
+        .py(5)
+        .items_start()
+        .rounded(8)
+        .when(Boolean(x.isActive), (el) => el.bg(tint(busy, "1f")))
+        .child(
+          svg(ICON(x.isDone ? "erledigt" : x.isActive ? "aktiv" : "offen"))
+            .mt(2)
+            .size(16)
+            .flex_none()
+            .text_color(x.isDone ? t.dim : x.isActive ? busy : t.muted),
+        )
+        .child(
+          div()
+            .flex_1()
+            .min_w(0)
+            .text_size(S)
+            .line_height(1.35)
+            .text_color(x.isDone ? t.dim : t.foreground)
+            .when(Boolean(x.isDone), (el) => el.line_through())
+            .when(Boolean(x.isActive), (el) => el.font_medium())
+            .child(x.text),
+        )
+        .when(Boolean(x.isActive && x.startedAt), (el) => el.child(div().mt(4).child(this.meta(busy, since(x.startedAt)))));
+    return v_flex()
+      .flex_none()
+      .child(
+        h_flex()
+          .flex_none()
+          .gap(10)
+          .items_center()
+          .mb(10)
+          .child(div().flex_none().font_family(MONO).text_size(XS).font_semibold().text_color(t.foreground).child("TODOS"))
+          .child(h_flex().flex_1().h(4).rounded(2).bg(t.border).child(div().h_full().rounded(2).bg(t.ansi2).w(`${Math.round(share * 100)}%`)))
+          .child(this.meta(t.muted, `${done}/${list.length}`)),
+      )
+      .child(v_flex().gap(2).children(shown.map(row)))
+      .when(done > 0, (el) =>
+        el.child(
+          div()
+            .pt(6)
+            .px(8)
+            .child(
+              this.quiet(t, "todos-hide", this.view.hideDone ? `${done} erledigte einblenden` : "Erledigte ausblenden", (cx) => {
+                this.setView("hideDone", !this.view.hideDone);
+                cx.notify();
+              }),
+            ),
+        ),
+      );
+  }
+
+  // Plan files as a small tree: plan and version, its review and verify beneath; a click opens the file
+  plans(t, list) {
+    const row = (id, icon, name, right, path, isSub) =>
+      h_flex()
+        .id(id)
+        .flex_none()
+        .gap(10)
+        .px(8)
+        .py(5)
+        .when(isSub, (el) => el.pl(34))
+        .items_center()
+        .rounded(8)
+        .cursor_pointer()
+        .hover((s) => s.bg(t.hover))
+        .on_click(() => exec("open", [path]))
+        .child(svg(ICON(icon)).size(isSub ? 14 : 16).flex_none().text_color(t.muted))
+        .child(div().flex_1().min_w(0).truncate().text_size(S).text_color(t.foreground).child(name))
+        .when(Boolean(right), (el) => el.child(this.meta(t.dim, right)));
+    return v_flex()
+      .flex_none()
+      .gap(2)
+      .children(
+        list.flatMap((p) => {
+          const base = p.path.replace(/\.md$/, "");
+          const rows = [row(`plan-${p.path}`, "plan", `${p.name}.md`, p.version ? `v${p.version}` : "", p.path, false)];
+          const review = p.files?.find((f) => f.path.endsWith(".review.md"));
+          if (review?.exists) {
+            const right = [p.latestReview && `#${p.latestReview}`, p.reviewedVersion && `gegen v${p.reviewedVersion}`].filter(Boolean).join(" · ");
+            rows.push(row(`review-${p.path}`, "review", "review.md", right, `${base}.review.md`, true));
+          }
+          const verify = p.files?.find((f) => f.path.endsWith(".verify.md"));
+          if (verify?.exists) {
+            const right = [p.verify?.version && `v${p.verify.version}`, p.verify?.result].filter(Boolean).join(" · ");
+            rows.push(row(`verify-${p.path}`, "verify", "verify.md", right, `${base}.verify.md`, true));
+          }
+          return rows;
+        }),
       );
   }
 
@@ -369,111 +505,125 @@ export default class Fokus extends View {
     return h_flex()
       .id(`art-${a.href}`)
       .flex_none()
-      .h(34)
-      .px(8)
-      .gap(10)
+      .px(6)
+      .py(6)
+      .gap(12)
       .items_center()
-      .rounded(8)
+      .rounded(10)
       .cursor_pointer()
       .hover((s) => s.bg(t.hover))
       .on_click(() => exec("open", [a.href]))
-      .child(div().size(24).flex_none().flex().items_center().justify_center().rounded(6).bg(tint(CLAUDE, "22")).text_color(CLAUDE).child(svg(ICON("page")).size(13)))
-      .child(div().flex_1().min_w(0).truncate().text_size(12.5).child(a.label))
-      .when(Boolean(a.at), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(ago(a.at))));
-  }
-
-  todos(t, list) {
-    const done = list.filter((x) => x.isDone);
-    const open = list.filter((x) => !x.isDone);
-    const share = list.length ? done.length / list.length : 0;
-    const green = t.ansi2;
-    return v_flex()
-      .flex_none()
-      .gap(4)
-      .child(
-        h_flex()
-          .h(6)
-          .mb(6)
-          .rounded(3)
-          .bg(t.border)
-          .child(div().h_full().rounded(3).bg(green).w(`${Math.round(share * 100)}%`)),
-      )
-      .children(
-        open.map((x) =>
-          h_flex()
-            .flex_none()
-            .gap(9)
-            .px(8)
-            .py(5)
-            .items_start()
-            .rounded(7)
-            .when(Boolean(x.isActive), (el) => el.bg(tint(CLAUDE, "1c")))
-            .child(
-              div()
-                .mt(2)
-                .flex_none()
-                .when(Boolean(x.isActive), (el) => el.size(12).rounded(6).border_2().border_color(CLAUDE))
-                .when(!x.isActive, (el) => el.child(svg(ICON("circle")).size(12).text_color(t.dim))),
-            )
-            .child(
-              div()
-                .flex_1()
-                .text_size(12.5)
-                .line_height(1.4)
-                .text_color(x.isActive ? t.foreground : t.muted)
-                .when(Boolean(x.isActive), (el) => el.font_medium())
-                .child(x.text),
-            ),
-        ),
-      )
-      .when(done.length > 0, (el) =>
-        el.child(
-          h_flex()
-            .id("todos-done")
-            .gap(8)
-            .px(8)
-            .py(4)
-            .items_center()
-            .text_size(12)
-            .text_color(green)
-            .cursor_pointer()
-            .on_click((_e, cx) => {
-              this.toggle("done");
-              cx.notify();
-            })
-            .child(svg(ICON("check")).size(12))
-            .child(`${done.length} erledigt`)
-            .child(div().flex_1())
-            .child(this.button(t, "todos-clear", "entfernen", () => this.send({ do: "todos.clearDone" }), { quiet: true })),
-        ),
-      )
-      .when(Boolean(this.open.done), (el) =>
-        el.children(done.map((x) => div().px(8).pl(29).text_size(12).text_color(t.dim).line_through().child(x.text))),
-      );
-  }
-
-  logEntry(t, x) {
-    const green = t.ansi2;
-    return h_flex()
-      .flex_none()
-      .gap(10)
-      .items_start()
-      .child(v_flex().items_center().pt(3).child(div().size(7).rounded(4).bg(green)))
+      .child(div().size(32).flex_none().flex().items_center().justify_center().rounded(9).bg(t.raised).text_color(t.muted).child(svg(ICON(kindOf(a.href))).size(18)))
       .child(
         v_flex()
           .flex_1()
           .min_w(0)
           .gap(2)
-          .pb(8)
-          .child(div().text_size(12).line_height(1.4).text_color(t.muted).child(x.text))
-          .child(
-            h_flex()
-              .gap(6)
-              .text_size(12.5)
-              .child(div().flex_1().font_medium().text_color(t.foreground).child(x.answer || "beantwortet"))
-              .child(div().flex_none().text_size(11).text_color(t.dim).child(ago(x.at))),
+          .child(div().truncate().text_size(S).line_height(1.2).text_color(t.foreground).child(a.label))
+          .child(div().truncate().font_family(MONO).text_size(XS).line_height(1.2).text_color(t.dim).child(hostOf(a.href))),
+      )
+      .when(Boolean(a.at), (el) => el.child(this.meta(t.dim, ago(a.at))));
+  }
+
+  // Griffe: one look for all; a click puts the prompt in the box, the × on hover removes it
+  griffe(t, list) {
+    const chip = (g, i) => {
+      const key = `griff-${i}`;
+      const isHot = this.hover === key;
+      return h_flex()
+        .id(key)
+        .flex_none()
+        .px(11)
+        .py(5)
+        .gap(6)
+        .items_center()
+        .rounded(9)
+        .bg(t.background)
+        .cursor_pointer()
+        .hover((s) => s.bg(t.hover))
+        .tooltip(g.text)
+        .on_hover((h, cx) => {
+          this.hover = h ? key : this.hover === key ? null : this.hover;
+          cx.notify();
+        })
+        .on_click(() => this.send({ do: "griff.put", index: i }))
+        .child(div().text_size(S).text_color(t.foreground).child(g.label))
+        .when(isHot, (el) =>
+          el.child(
+            div()
+              .id(`${key}-x`)
+              .text_size(S)
+              .text_color(t.dim)
+              .hover((s) => s.text_color(t.foreground))
+              .on_click((_e, cx) => {
+                cx.stop_propagation();
+                this.send({ do: "griff.remove", index: i });
+              })
+              .child("×"),
           ),
-      );
+        );
+    };
+    const add = this.isAdding
+      ? h_flex()
+          .flex_none()
+          .w_full()
+          .h(34)
+          .px(10)
+          .rounded(9)
+          .bg(t.background)
+          .items_center()
+          .child(Input.new(this.input).flex_1().h_full().text_size(S).text_color(t.foreground))
+      : h_flex()
+          .id("griff-add")
+          .flex_none()
+          .px(11)
+          .py(5)
+          .rounded(9)
+          .cursor_pointer()
+          .text_size(S)
+          .text_color(t.dim)
+          .hover((s) => s.bg(t.hover).text_color(t.foreground))
+          .on_click((_e, cx) => {
+            this.isAdding = true;
+            this.input.focus();
+            cx.notify();
+          })
+          .child("+ Griff hinzufügen");
+    return h_flex().flex_none().flex_wrap().gap(6).children(list.map(chip)).child(add);
+  }
+
+  // Who held the ball when, over the last two hours, and the figures that follow from it
+  session(t, b) {
+    const now = Date.now();
+    const segs = ballSegments(this.timeline[this.terminal] ?? [], now);
+    if (segs.length === 0) return null;
+    const total = segs.reduce((s, x) => s + (x.to - x.from), 0) || 1;
+    const sum = (k) => segs.filter((x) => x.k === k).reduce((s, x) => s + (x.to - x.from), 0);
+    const pc = (k) => `${Math.round((sum(k) / total) * 100)} %`;
+    const longest = Math.max(0, ...segs.filter((x) => x.k === "C").map((x) => x.to - x.from));
+    const waits = (b.log ?? []).filter((x) => x.openedAt && x.at >= now - WINDOW_MS).map((x) => x.at - x.openedAt);
+    const avgWait = waits.length ? waits.reduce((s, x) => s + x, 0) / waits.length : null;
+    const topics = (b.trail ?? []).filter((x) => x.at >= now - WINDOW_MS).length + (b.topic ? 1 : 0);
+    const color = { C: t.working ?? t.ansi6, D: t.blocked ?? t.ansi1, R: t.border };
+    const start = segs[0].from;
+    // One line of shares that doubles as the legend, one line of the rest
+    const share = (c, name, k) => h_flex().gap(5).items_center().child(div().size(6).rounded(3).bg(c)).child(this.meta(t.muted, `${name} ${pc(k)}`));
+    const rest = [`längster Block ${span(longest)}`, avgWait !== null && `Frage offen Ø ${span(avgWait)}`, `${topics} ${topics === 1 ? "Thema" : "Themen"}`]
+      .filter(Boolean)
+      .join(" · ");
+    return v_flex()
+      .flex_none()
+      .gap(8)
+      .child(this.label(t, "Session", this.meta(t.muted, span(now - start))))
+      .child(
+        h_flex()
+          .flex_none()
+          .h(6)
+          .gap(1)
+          .children(segs.map((x) => div().h_full().rounded(2).bg(color[x.k]).w(`${((x.to - x.from) / total) * 100}%`))),
+      )
+      .child(h_flex().gap(14).flex_wrap().child(share(color.C, "Claude", "C")).child(share(color.D, "du", "D")).child(share(t.dim, "Pause", "R")))
+      .child(this.meta(t.dim, rest));
   }
 
   // ── the view ────────────────────────────────────────────────────────────────
@@ -486,131 +636,80 @@ export default class Fokus extends View {
 
     const b = this.board;
     const agent = agents().find((a) => a.address === this.terminal);
-    const status = b?.ended ? null : agent?.status ?? null;
-    const statusColor = { working: t.working, blocked: t.blocked, done: t.done, idle: t.idle }[status] ?? t.dim;
-
-    // As tall as the pane header beside it (layout pane.header height 30, below a 2 px gap)
-    const head = h_flex()
-      .flex_none()
-      .h(32)
-      .px(14)
-      .gap(8)
-      .items_center()
-      .border_b(1)
-      .border_color(t.border)
-      .child(svg(ICON("focus")).size(14).text_color(CLAUDE))
-      .child(div().text_size(12.5).font_semibold().child("Fokus"))
-      .child(div().flex_1())
-      .when(Boolean(this.terminal), (el) =>
-        el.child(
-          h_flex()
-            .gap(6)
-            .px(8)
-            .h(20)
-            .items_center()
-            .rounded(10)
-            .bg(t.raised)
-            .text_size(11.5)
-            .text_color(t.muted)
-            .child(div().size(7).rounded(4).bg(b?.ended ? t.dim : statusColor))
-            .child(div().max_w(150).truncate().child(agent?.tab_name || this.terminal))
-            .child(div().text_color(t.dim).child(b?.ended ? "beendet" : STATUS_WORD[status] ?? "")),
-        ),
-      );
+    const canvas = t.canvas ?? t.background;
 
     if (!b) {
       const isClaude = agent?.app === "claude-code" || agent?.program?.key === "claude";
       const [title, text] = !this.terminal
         ? ["Noch kein Fokusboard", "Klick in einen Tab mit Claude Code."]
         : isClaude
-          ? ["Noch kein Fokusboard", "Diese Session schreibt noch keins. Es erscheint, sobald Claude ein Thema setzt. Läuft sie schon länger, starte sie neu (fokusboard 0.9.0)."]
+          ? ["Noch kein Fokusboard", "Es erscheint, sobald Claude ein Thema setzt. Läuft die Session schon länger, starte sie neu."]
           : ["Kein Claude Code in diesem Tab", "Das Fokusboard gehört zu einer Claude-Code-Session."];
       return v_flex()
         .size_full()
-        .bg(t.canvas ?? t.background)
-        .child(head)
-        .child(
-          v_flex()
-            .flex_1()
-            .items_center()
-            .justify_center()
-            .gap(10)
-            .p(24)
-            .child(svg(ICON("focus")).size(28).text_color(tint(CLAUDE, "88")))
-            .child(div().text_size(13).font_medium().child(title))
-            .child(div().text_size(12).line_height(1.45).text_color(t.dim).text_center().child(text)),
-        );
+        .bg(canvas)
+        .items_center()
+        .justify_center()
+        .gap(10)
+        .p(24)
+        .child(svg(ICON("jetzt")).size(26).text_color(t.dim))
+        .child(div().text_size(S).font_medium().text_color(t.foreground).child(title))
+        .child(div().text_size(S).line_height(1.45).text_color(t.dim).text_center().child(text));
     }
 
     const decisions = b.decisions ?? [];
     const order = { blocking: 0, important: 1, optional: 2 };
     const questions = [...decisions].sort((x, y) => order[x.weight ?? "important"] - order[y.weight ?? "important"]);
-    const blocking = decisions.filter((d) => d.weight === "blocking").length;
-    const links = [...(b.artifacts ?? []).map((a) => ({ ...a })), ...this.published.filter((p) => !(b.artifacts ?? []).some((a) => a.href === p.href))];
-    const log = b.log ?? [];
-    const shownLog = this.open.log ? [...log].reverse() : log.slice(-1);
+    const links = [...(b.artifacts ?? []), ...this.published.filter((p) => !(b.artifacts ?? []).some((a) => a.href === p.href))];
     const todos = b.todos ?? [];
+    const plans = b.plans ?? [];
+    const griffe = b.griffe ?? [];
+    const session = this.session(t, b);
 
     const body = v_flex()
       .id("fokus-body")
       .flex_1()
       .min_h(0)
-      .px(14)
-      .pb(20)
-      .gap(8)
+      .px(16)
+      .pb(26)
       .overflow_y_scrollbar()
-      .when(b.ended, (el) => el.opacity(0.6))
-      .when((b.notices ?? []).length > 0, (el) => el.child(v_flex().pt(12).gap(8).children(b.notices.map((n) => this.notice(t, n)))))
-      .when(Boolean(b.thread), (el) => el.child(this.thread(t, b.thread)))
-      .when(Boolean(b.topic), (el) => el.child(this.topic(t, b.topic)))
-      .when(!b.thread && !b.topic, (el) => el.child(div().pt(14).text_size(12.5).text_color(t.dim).child("Noch kein Thema. Claude setzt es, sobald das Gespräch eins hat.")))
+      .when(Boolean(b.ended), (el) => el.opacity(0.6))
+      .when(Boolean(b.thread || b.topic), (el) => el.child(this.head(t, b)))
+      .when(Boolean(b.ended), (el) => el.child(div().pt(6).child(this.meta(t.dim, "Session beendet"))))
+      .when(Boolean(b.topic), (el) => el.child(this.now(t, b.topic)))
+      .when(!b.topic, (el) => el.child(div().pt(20).text_size(S).text_color(t.dim).child("Noch kein Thema. Claude setzt es, sobald das Gespräch eins hat.")))
       .when(questions.length > 0, (el) =>
-        el
-          .child(
-            this.header(t, "Offene Fragen", blocking ? `${questions.length} · ${blocking} blockiert` : String(questions.length), {
-              icon: "help",
-              color: blocking ? t.blocked : t.ansi3,
-              action: questions.length > 1 ? this.button(t, "ask-all", "Alle stellen", () => this.send({ do: "ask" }), { quiet: true }) : null,
-            }),
-          )
-          .children(questions.map((d) => this.question(t, d))),
+        el.child(
+          this.section(
+            v_flex()
+              .gap(8)
+              .child(this.label(t, "Fragen", questions.length > 1 ? this.quiet(t, "ask-all", "alle beantworten →", () => this.send({ do: "ask" })) : null))
+              .children(questions.map((d) => this.question(t, d))),
+          ),
+        ),
       )
-      .when(todos.length > 0, (el) =>
-        el
-          .child(this.header(t, "Todos", `${todos.filter((x) => x.isDone).length}/${todos.length}`, { icon: "check" }))
-          .child(this.todos(t, todos)),
-      )
+      .when(todos.length > 0, (el) => el.child(this.section(this.todos(t, todos))))
+      .when(plans.length > 0, (el) => el.child(this.section(v_flex().child(this.label(t, "Pläne")).child(this.plans(t, plans)))))
       .when(links.length > 0, (el) =>
-        el.child(this.header(t, "Artefakte", String(links.length), { icon: "page" })).child(v_flex().gap(1).children(links.map((a) => this.artifact(t, a)))),
+        el.child(this.section(v_flex().child(this.label(t, "Artefakte")).child(v_flex().gap(2).children(links.map((a) => this.artifact(t, a)))))),
       )
-      .when(log.length > 0, (el) =>
-        el
-          .child(
-            this.header(t, "Entschieden", String(log.length), {
-              icon: "circle-check",
-              color: t.ansi2,
-              action:
-                log.length > 1
-                  ? this.button(t, "log-toggle", this.open.log ? "weniger" : `alle ${log.length}`, () => this.toggle("log"), { quiet: true })
-                  : null,
-            }),
-          )
-          .child(v_flex().children(shownLog.map((x) => this.logEntry(t, x)))),
-      );
+;
 
-    const foot = h_flex()
+    // Griffe and the session stay at the bottom while the board above scrolls; as one card
+    const foot = v_flex()
       .flex_none()
-      .h(28)
+      .mx(10)
+      .mb(10)
       .px(14)
-      .gap(6)
-      .items_center()
-      .text_size(11)
-      .text_color(t.dim)
-      .child(div().child(this.terminal))
-      .child(div().child("·"))
-      .child(div().flex_1().truncate().child((b.cwd ?? "").split("/").pop() ?? ""))
-      .child(div().child(b.updatedAt ? `aktualisiert ${ago(b.updatedAt)}` : ""));
+      .pt(14)
+      .pb(14)
+      .gap(18)
+      .rounded(14)
+      .bg(t.raised)
+      .when(Boolean(b.ended), (el) => el.opacity(0.6))
+      .child(v_flex().child(this.label(t, "Griffe")).child(this.griffe(t, griffe)))
+      .when(Boolean(session), (el) => el.child(session));
 
-    return v_flex().size_full().min_h(0).bg(t.canvas ?? t.background).text_color(t.foreground).child(head).child(body).child(foot);
+    return v_flex().size_full().min_h(0).bg(canvas).text_color(t.foreground).child(body).child(foot);
   }
 }

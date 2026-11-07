@@ -1,4 +1,5 @@
-export type Todo = { id: string; text: string; isDone: boolean; isActive?: boolean }
+// startedAt: when it became the active one, for "seit 3 min"
+export type Todo = { id: string; text: string; isDone: boolean; isActive?: boolean; startedAt?: number }
 
 // How much an open question holds up the work: blocking stops it, optional can wait
 export type Weight = 'blocking' | 'important' | 'optional'
@@ -9,6 +10,8 @@ export type Decision = {
   text: string
   context?: string
   options?: string[]
+  // One short line per option on what it does, same order as options ('' where none)
+  notes?: string[]
   recommended?: string
   weight?: Weight
   // When it was opened, to tell whether a turn put its question on the board
@@ -18,19 +21,17 @@ export type Decision = {
 // What the whole conversation is about; stable, changed only when the overall goal changes
 export type Thread = { title: string; goal: string }
 
-export type Topic = { title: string; summary: string; points: string[] }
+// at: when this subject began (kept while only the summary changes)
+export type Topic = { title: string; summary: string; points: string[]; at?: number }
 
-// The person's own note or todo; Claude reads these but never changes them
-export type Note = { id: string; text: string; isDone: boolean; at: number }
+// An earlier topic of the session, for the dots beside the thread title
+export type TopicMark = { title: string; at: number }
 
-// An answered decision, kept so later work can see why things are as they are
-export type LogEntry = { text: string; answer: string; at: number }
+// A prompt the person sends again and again; {plan} stands for the open plan's path
+export type Griff = { label: string; text: string }
 
-// Something that changed in a tracked plan outside this session and asks for a step
-export type Notice = { path: string; name: string; kind: 'review' | 'gaps' | 'verified'; label: string; at: number }
-
-// What is kept per repository and branch across sessions: the person's own notes
-export type Saved = { notes?: Note[] }
+// An answered decision, kept so later work can see why things are as they are; openedAt: when it was asked
+export type LogEntry = { text: string; answer: string; at: number; openedAt?: number }
 
 // A session's board as it last stood, so a resumed session (same id) gets it back
 export type SavedBoard = {
@@ -42,6 +43,7 @@ export type SavedBoard = {
   artifacts: Artifact[]
   log: LogEntry[]
   plans: string[]
+  trail?: TopicMark[]
 }
 
 // A link that matters for the current work: a claude.ai artifact, a PR, a doc
@@ -86,13 +88,14 @@ declare module 'claude-code' {
       planStatus: PlanStatus[]
       lastCodeEditAt: number
       log: LogEntry[]
-      showLog: boolean
-      notices: Notice[]
-      notes: Note[]
+      // Finished todos folded away in the pane
+      hideDone: boolean
+      // Earlier topics of this session, oldest first
+      trail: TopicMark[]
+      // The person's saved prompts (kept across sessions in the store)
+      griffe: Griff[]
       // When the current turn began, to tell whether it put its questions on the board
       turnStartAt: number
-      // Plans whose review or verify file this session wrote itself (a sol loop): no notice for those
-      ownWrites: { path: string; at: number }[]
     }
   }
 }

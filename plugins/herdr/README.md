@@ -153,21 +153,34 @@ shows more.
 ## The Fokus sidebar
 
 The **Fokus** button in the top bar opens the right panel's third tab, next to Files and Changes.
-It shows the [Fokusboard](../fokusboard) of the Claude Code session in the focused terminal, live:
-thread, current topic, open questions, todos, artifacts and the decision log. The plan workflow and
-your own notes stay in the terminal pane.
+It shows the [Fokusboard](../fokusboard) of the Claude Code session in the focused terminal, live,
+calm and in one order: what the conversation is about (one dot per topic), Jetzt, open questions,
+todos, plans, artifacts, Griffe and the session's analysis. No frames, no glow; the colors come
+from the Herdr theme picked in the settings, the icons from the one-color "Linse" set (`l-*.svg`),
+text sizes from the golden ratio (10 and 16).
 The red badge on the button counts the focused session's open questions.
 
 ```
 fokusboard plugin (Claude Code)                       mods/fokus (Herdr)
   every second, when the board changed ──► ~/.local/state/fokusboard/<terminal>.json ──► draws it
   carries out the click (prompt box,  ◄── ~/.local/state/fokusboard/<terminal>.inbox.jsonl ◄── a click
-  ask, explain, note …)
+  ask, explain, Griff …)
 ```
 
-- A click on an answer option puts "Zu „…“: option" in the prompt box. You send it yourself.
-- Under each question: Antworten (puts "Zu „…“: " in the prompt box), Erklären, Fragen (Claude
-  asks it in a dialog) and ✕ (dismiss). "Alle stellen" asks every open question at once.
+- **Fragen:** one row per answer with a short note on what it does; the recommended one is tinted.
+  A click puts "Zu „…“: option" in the prompt box; you send it yourself. Below each question:
+  Eigene Antwort (puts "Zu „…“: " in the prompt box) and Erklären. "alle beantworten →" has Claude
+  ask every open question in a dialog.
+- **Todos:** the bar and "3/5" sit in the label; every todo stays, the active one with "seit 3 min";
+  "Erledigte ausblenden" folds the finished ones away (kept per Herdr, not per session).
+- **Pläne:** each tracked plan with its version, its `review.md` (#2 · gegen v4) and `verify.md`
+  (v4 · vollständig) beneath; a click opens the file.
+- **Griffe:** prompts sent again and again, one list for all sessions (kept by fokusboard). A
+  click puts one in the prompt box, `{plan}` filled with the open plan's path; × on hover removes
+  it, "+ Griff hinzufügen" adds one.
+- **Session:** who held the ball over the last two hours, sampled here every 5 s from the agent's
+  status: Claude working, waiting on you, and a pause once you were away for 10 minutes; below it
+  the shares, how long questions stayed open, the longest stretch of work and the topics.
 - In Herdr the Fokusboard opens no terminal pane. `/fokus` and `◎ Fokus` show this tab instead.
 - Each terminal tab shows its own session's board, and the badge counts its questions. A session
   that started before fokusboard 0.9.0 writes none until it restarts. When a session ends, its board turns grey.
@@ -181,7 +194,7 @@ rename it to "" to hand it back. Before the board has a thread, the tab shows Cl
 terminal title, as the Agents list does. The board folder is watched and also read every 5 s,
 so a change the watch missed, or a tab Herdr recognised late, still gets its name.
 
-Needs `fokusboard@cosmic-code-marketplace` 0.9.0 or later.
+Needs `fokusboard@cosmic-code-marketplace` 0.11.0 or later (Griffe, plans, answer notes; older versions still draw the rest).
 
 ## The Artefakte dropdown
 

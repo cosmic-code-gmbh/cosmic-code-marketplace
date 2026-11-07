@@ -4,7 +4,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Artifact, Decision, LogEntry, Note, Notice, PlanStatus, Saved, SavedBoard, Step, Thread, Todo, Topic, Weight } from '../types'
+import type { Artifact, Decision, Griff, LogEntry, PlanStatus, SavedBoard, Step, Thread, Todo, Topic, TopicMark, Weight } from '../types'
 
 const PANE = 'fokusboard'
 const TITLE = 'Fokusboard'
@@ -16,8 +16,8 @@ const HERDR_MS = 1000
 const SAVE_MS = 2000
 const SAVED_SESSIONS = 30
 const BOARDS_KEY = 'boards'
-// How long a review or verify file this session wrote counts as its own (no notice)
-const OWN_WRITE_MS = 60_000
+// The person's saved prompts are one list across all sessions
+const GRIFFE_KEY = 'griffe'
 
 const thread = atom({ plugin: 'fokusboard', key: 'thread' } as const, null as Thread | null)
 const topic = atom({ plugin: 'fokusboard', key: 'topic' } as const, null as Topic | null)
@@ -29,11 +29,10 @@ const plans = atom({ plugin: 'fokusboard', key: 'plans' } as const, [] as string
 const planStatus = atom({ plugin: 'fokusboard', key: 'planStatus' } as const, [] as PlanStatus[])
 const lastCodeEditAt = atom({ plugin: 'fokusboard', key: 'lastCodeEditAt' } as const, 0)
 const log = atom({ plugin: 'fokusboard', key: 'log' } as const, [] as LogEntry[])
-const showLog = atom({ plugin: 'fokusboard', key: 'showLog' } as const, false)
-const notices = atom({ plugin: 'fokusboard', key: 'notices' } as const, [] as Notice[])
-const notes = atom({ plugin: 'fokusboard', key: 'notes' } as const, [] as Note[])
+const hideDone = atom({ plugin: 'fokusboard', key: 'hideDone' } as const, false)
+const trail = atom({ plugin: 'fokusboard', key: 'trail' } as const, [] as TopicMark[])
+const griffe = atom({ plugin: 'fokusboard', key: 'griffe' } as const, [] as Griff[])
 const turnStartAt = atom({ plugin: 'fokusboard', key: 'turnStartAt' } as const, 0)
-const ownWrites = atom({ plugin: 'fokusboard', key: 'ownWrites' } as const, [] as { path: string; at: number }[])
 
 const DESCRIPTION = [
   "Keep the user's Fokusboard current: a sidebar that stays in view while the transcript scrolls, showing the current topic, the plan workflow, artifacts, open questions and the task list.",
@@ -43,7 +42,7 @@ const DESCRIPTION = [
   "Write everything on the board in the user's language.",
   'track_plans: paths of plan files (.claude/plans/<name>.md or docs/**/<name>.md of the Plan → Review → Einarbeiten → Umsetzen → Verify workflow, run by hand or as a sol loop) this session works on; the board reads their version headers and .review.md/.verify.md siblings itself. Plans you write, edit or exit plan mode with are tracked automatically. untrack_plans removes them.',
   'add_artifacts: links that matter for the current work ({label, href}): claude.ai artifacts, PRs, docs. remove_artifacts: by href.',
-  'open_decisions: every question you put to the user that needs an answer, however small, even a yes/no, wherever it sits in your reply. The user answers from the board, so make each one self-contained: {question, context, options, recommended, weight}. context: 1-3 sentences on why it comes up now and what depends on it. options: 2-4 short answers. recommended: the option you would pick. weight: blocking (work stops until answered), important (shapes the result) or optional (a nicety; a default applies).',
+  'open_decisions: every question you put to the user that needs an answer, however small, even a yes/no, wherever it sits in your reply. The user answers from the board, so make each one self-contained: {question, context, options, recommended, weight}. context: 1-3 sentences on why it comes up now and what depends on it. options: 2-4 short answers, each as a string or {label, note} where note says in one short line what picking it does. recommended: the option you would pick. weight: blocking (work stops until answered), important (shapes the result) or optional (a nicety; a default applies).',
   'Questions you ask with AskUserQuestion land on the board by themselves and close with the answer. edit_decisions: sharpen an open question by id (context, options, recommended, weight), e.g. after explaining it.',
   'decide: close a decision by id once the user has answered, with the answer in a few words (it stays in the decision log the user reads later).',
   'Use todos in place of writing task lists in your reply whenever the work takes 3+ distinct steps. add_todos: one action per item. start_todo: the todo id you are working on now; exactly one at a time. done_todos / remove_todos: todo ids. Mark a todo done only after the work, including any verification, is actually done. clear_done: drop finished todos when a new topic starts.',
@@ -52,6 +51,11 @@ const DESCRIPTION = [
 
 const strings = { type: 'array', items: { type: 'string' } }
 const WEIGHT = { type: 'string', enum: ['blocking', 'important', 'optional'] }
+// An answer: a plain label, or a label with a one-line note on what it does
+const OPTIONS = {
+  type: 'array',
+  items: { anyOf: [{ type: 'string' }, { type: 'object', properties: { label: { type: 'string' }, note: { type: 'string' } }, required: ['label'] }] },
+}
 const SCHEMA = {
   type: 'object',
   properties: {
@@ -84,7 +88,7 @@ const SCHEMA = {
           { type: 'string' },
           {
             type: 'object',
-            properties: { question: { type: 'string' }, context: { type: 'string' }, options: strings, recommended: { type: 'string' }, weight: WEIGHT },
+            properties: { question: { type: 'string' }, context: { type: 'string' }, options: OPTIONS, recommended: { type: 'string' }, weight: WEIGHT },
             required: ['question'],
           },
         ],
@@ -94,7 +98,7 @@ const SCHEMA = {
       type: 'array',
       items: {
         type: 'object',
-        properties: { id: { type: 'string' }, question: { type: 'string' }, context: { type: 'string' }, options: strings, recommended: { type: 'string' }, weight: WEIGHT },
+        properties: { id: { type: 'string' }, question: { type: 'string' }, context: { type: 'string' }, options: OPTIONS, recommended: { type: 'string' }, weight: WEIGHT },
         required: ['id'],
       },
     },
@@ -105,7 +109,9 @@ const SCHEMA = {
   },
 }
 
-export type QuestionInput = { question: string; context?: string; options?: string[]; recommended?: string; weight?: Weight }
+export type OptionInput = string | { label: string; note?: string }
+
+export type QuestionInput = { question: string; context?: string; options?: OptionInput[]; recommended?: string; weight?: Weight }
 
 export type Update = {
   thread?: { title: string; goal: string; why?: string }
@@ -124,7 +130,7 @@ export type Update = {
   decide?: { id: string; answer: string }[]
 }
 
-export type Board = { thread: Thread | null; topic: Topic | null; todos: Todo[]; decisions: Decision[]; artifacts: Artifact[]; log: LogEntry[] }
+export type Board = { thread: Thread | null; topic: Topic | null; todos: Todo[]; decisions: Decision[]; artifacts: Artifact[]; log: LogEntry[]; trail?: TopicMark[] }
 
 // The next id for a prefix: one past the highest in use
 const nextId = (prefix: string, ids: string[]) =>
@@ -132,11 +138,18 @@ const nextId = (prefix: string, ids: string[]) =>
 
 // The fields of a question as the board keeps them: trimmed, empty ones left out
 function questionFields(q: Partial<QuestionInput>): Partial<Omit<Decision, 'id' | 'at'>> {
-  const options = q.options?.map(o => o.trim()).filter(Boolean).slice(0, 4)
+  const given = (q.options ?? [])
+    .map(o => (typeof o === 'string' ? { label: o.trim(), note: '' } : { label: o.label.trim(), note: o.note?.trim() ?? '' }))
+    .filter(o => o.label)
+    .slice(0, 4)
+  const options = given.map(o => o.label)
+  const notes = given.map(o => o.note)
   return {
     ...(q.question?.trim() && { text: q.question.trim() }),
     ...(q.context?.trim() && { context: q.context.trim() }),
-    ...(options?.length && { options }),
+    ...(options.length && { options }),
+    // Notes only when at least one option has one; editing the options replaces them
+    ...(q.options && { notes: notes.some(Boolean) ? notes : undefined }),
     ...(q.recommended?.trim() && { recommended: q.recommended.trim() }),
     ...(q.weight && { weight: q.weight }),
   }
@@ -144,15 +157,21 @@ function questionFields(q: Partial<QuestionInput>): Partial<Omit<Decision, 'id' 
 
 export function applyUpdate(board: Board, change: Update, now = Date.now()): Board {
   let { thread: th, topic: tp, todos: t, decisions: d, artifacts: a, log: l } = board
+  let trailOut = board.trail ?? []
   // The thread is the stable anchor: set once, replaced only with a reason
   if (change.thread && (!th || change.thread.why?.trim())) {
     th = { title: change.thread.title.trim(), goal: change.thread.goal.trim() }
   }
   if (change.topic) {
+    const title = change.topic.title.trim()
+    // A new subject starts a new topic; the old one joins the trail. A changed summary keeps its time.
+    const isNew = !tp || tp.title !== title
+    if (tp && isNew) trailOut = [...trailOut, { title: tp.title, at: tp.at ?? now }].slice(-8)
     tp = {
-      title: change.topic.title.trim(),
+      title,
       summary: change.topic.summary.trim(),
       points: (change.topic.points ?? []).map(p => p.trim()).filter(Boolean).slice(0, 5),
+      at: isNew ? now : (tp?.at ?? now),
     }
   }
   const gone = new Set(change.remove_artifacts ?? [])
@@ -170,13 +189,18 @@ export function applyUpdate(board: Board, change: Update, now = Date.now()): Boa
   const decided = new Set((change.decide ?? []).map(x => x.id))
   t = t.filter(x => !removed.has(x.id)).map(x => (done.has(x.id) ? { ...x, isDone: true } : x))
   // One todo in progress at a time; finishing it ends its turn too
-  if (change.start_todo) t = t.map(x => ({ ...x, isActive: x.id === change.start_todo }))
+  if (change.start_todo) {
+    t = t.map(x => (x.id === change.start_todo ? { ...x, isActive: true, startedAt: x.isActive ? (x.startedAt ?? now) : now } : { ...x, isActive: false }))
+  }
   t = t.map(x => (x.isDone && x.isActive ? { ...x, isActive: false } : x))
   // A decision closes into the log with its answer, so the why stays findable
   const answers = new Map((change.decide ?? []).map(x => [x.id, x.answer.trim()]))
-  l = [...l, ...d.filter(x => decided.has(x.id)).map(x => ({ text: x.text, answer: answers.get(x.id) ?? '', at: now }))].slice(-30)
+  l = [
+    ...l,
+    ...d.filter(x => decided.has(x.id)).map(x => ({ text: x.text, answer: answers.get(x.id) ?? '', at: now, ...(x.at !== undefined && { openedAt: x.at }) })),
+  ].slice(-30)
   d = d.filter(x => !decided.has(x.id))
-  return { thread: th, topic: tp, todos: t, decisions: d, artifacts: a.slice(-12), log: l }
+  return { thread: th, topic: tp, todos: t, decisions: d, artifacts: a.slice(-12), log: l, trail: trailOut }
 }
 
 // ── Questions ───────────────────────────────────────────────────────────────
@@ -214,6 +238,7 @@ export function fromDialog(list: Decision[], questions: { question: string; head
       continue
     }
     const labels = (q.options ?? []).map(o => o.label)
+    const notes = (q.options ?? []).map(o => o.description?.trim() ?? '')
     const recommended = labels.find(l => /\((recommended|empfohlen)\)/i.test(l))
     const id = nextId('d', next.map(x => x.id))
     next = [
@@ -223,6 +248,7 @@ export function fromDialog(list: Decision[], questions: { question: string; head
         text: q.question.trim(),
         ...(q.header && { context: q.header }),
         ...(labels.length && { options: labels.map(l => l.replace(/\s*\((recommended|empfohlen)\)/i, '')) }),
+        ...(notes.some(Boolean) && { notes }),
         ...(recommended && { recommended: recommended.replace(/\s*\((recommended|empfohlen)\)/i, '') }),
         weight: 'important' as const,
         at: now,
@@ -403,48 +429,6 @@ async function refresh($: EngineInterface) {
   const before = await read($, planStatus)
   if (JSON.stringify(before) === JSON.stringify(next)) return
   await update($, planStatus, () => next)
-  // A review or verify this session wrote (a sol loop) is its own work in progress, not news
-  const now = Date.now()
-  const own = new Set((await read($, ownWrites)).filter(w => now - w.at < OWN_WRITE_MS).map(w => w.path))
-  const fresh = noticesFor(before, next, now).filter(n => !own.has(n.path))
-  const kept = (await read($, notices)).filter(n => stillDue(n, next))
-  const all = [...kept.filter(n => !fresh.some(f => f.path === n.path && f.kind === n.kind)), ...fresh]
-  if (JSON.stringify(all) !== JSON.stringify(await read($, notices))) await update($, notices, () => all)
-  for (const n of fresh) {
-    try {
-      await $.ui.toast(`Fokusboard: ${n.label}`)
-    } catch {}
-  }
-}
-
-// What changed in a plan since the last read and asks for a step: a new review, a new verify result
-export function noticesFor(before: PlanStatus[], after: PlanStatus[], now: number): Notice[] {
-  const out: Notice[] = []
-  for (const s of after) {
-    const prev = before.find(b => b.path === s.path)
-    // A plan seen for the first time is not news
-    if (!prev) continue
-    if ((s.latestReview ?? 0) > (prev.latestReview ?? 0)) {
-      out.push({ path: s.path, name: s.name, kind: 'review', label: `Review #${s.latestReview} zu ${s.name} ist da`, at: now })
-    }
-    if (s.verifyResult && (s.verifyResult !== prev.verifyResult || s.verifiedVersion !== prev.verifiedVersion)) {
-      out.push(
-        s.verifyResult === 'vollständig'
-          ? { path: s.path, name: s.name, kind: 'verified', label: `${s.name} ist vollständig verifiziert`, at: now }
-          : { path: s.path, name: s.name, kind: 'gaps', label: `Verify zu ${s.name}: ${s.verifyResult}`, at: now },
-      )
-    }
-  }
-  return out
-}
-
-// A notice goes once its step is done: the review worked in, the gaps closed
-export function stillDue(n: Notice, status: PlanStatus[]): boolean {
-  const s = status.find(x => x.path === n.path)
-  if (!s) return false
-  if (n.kind === 'review') return (s.latestReview ?? 0) > (s.integratedReview ?? 0)
-  if (n.kind === 'gaps') return s.verifyResult !== 'vollständig'
-  return true
 }
 
 // A path the workflow knows: a Markdown file under .claude/plans/ or docs/
@@ -508,6 +492,7 @@ const readBoard = async ($: EngineInterface): Promise<Board> => ({
   todos: await read($, todos),
   decisions: await read($, decisions),
   artifacts: await read($, artifacts),
+  trail: await read($, trail),
 })
 
 const isEmpty = (b: Board) => !b.thread && !b.topic && b.todos.length + b.decisions.length + b.artifacts.length === 0
@@ -532,11 +517,21 @@ export function summarize(change: Update): string {
   return 'Fokusboard: ' + (parts.join(', ') || 'no change')
 }
 
-// A focus target for the title of the topic card; the desktop draws SVG as an image, so the accent is a hex, not a theme key
-const FOCUS_ICON =
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">' +
-  '<circle cx="12" cy="12" r="8.75" stroke="#D97757" stroke-width="2.5"/>' +
-  '<circle cx="12" cy="12" r="3.75" fill="#D97757"/></svg>'
+// What kind of link an artifact is, from its URL: a claude.ai artifact, a pull request, or a document
+export function artifactKind(href: string): { kind: 'artifact' | 'pr' | 'doc'; glyph: string } {
+  if (/claude\.ai\/(code\/)?artifact\//.test(href)) return { kind: 'artifact', glyph: '◇' }
+  if (/github\.com\/[^/]+\/[^/]+\/pull\/\d+/.test(href)) return { kind: 'pr', glyph: '⑂' }
+  return { kind: 'doc', glyph: '▤' }
+}
+
+// "claude.ai", "github · PR #412", or the path's file name for a local file
+export function hostOf(href: string): string {
+  const pr = href.match(/github\.com\/[^/]+\/([^/]+)\/pull\/(\d+)/)
+  if (pr) return `github · ${pr[1]} #${pr[2]}`
+  const m = href.match(/^[a-z]+:\/\/([^/]+)/i)
+  if (m && !href.startsWith('file:')) return m[1]!.replace(/^www\./, '')
+  return href.split('/').filter(Boolean).slice(-2, -1)[0] ?? href
+}
 
 // In Herdr the board is the sidebar tab of the herdr plugin (mods/fokus); the terminal pane stays closed
 const open = async ($: EngineInterface) => (herdr ? showInHerdr($) : void (await $.ui.open({ id: PANE, title: TITLE })))
@@ -602,43 +597,48 @@ async function openFile($: EngineInterface, path: string) {
   if (exitCode !== 0) await $.ui.toast(`Konnte ${path.split('/').at(-1)} nicht öffnen: ${stderr.trim()}`)
 }
 
-// ── The person's own notes, kept per repository and branch ──────────────────
+// ── Griffe: prompts the person sends again and again, one list across sessions ──
 
-// The store key of this checkout: its repository root and branch, or the folder outside git
-async function storeKey($: EngineInterface): Promise<string> {
-  try {
-    const top = await $.process.run(['git', 'rev-parse', '--show-toplevel'])
-    const head = await $.process.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'])
-    if (top.exitCode === 0 && head.exitCode === 0) return `board:${top.stdout.trim()}:${head.stdout.trim()}`
-  } catch {}
-  return `board:${await $.session.cwd().catch(() => 'unknown')}`
-}
+export const DEFAULT_GRIFFE: Griff[] = [
+  { label: 'Plan komplett umsetzen', text: 'Setze {plan} komplett um.' },
+  { label: 'Simplify', text: '/simplify' },
+  { label: 'Verify', text: '/workflow:plan-verify {plan}' },
+  { label: 'Sol-Verify', text: 'sol loop verify {plan}' },
+  { label: 'Sol-Loop Plan', text: 'sol loop plan {plan}' },
+  { label: 'Review einarbeiten', text: '/workflow:plan-integrate-review {plan}' },
+  { label: 'Code-Review', text: '/code-review high' },
+  { label: 'Plan-Status', text: '/workflow:plan-status' },
+]
 
-export function addNote(list: Note[], text: string, now: number): Note[] {
+// A new Griff from what the person typed: the label is the text, shortened
+export function addGriff(list: Griff[], text: string, label?: string): Griff[] {
   const clean = text.trim()
-  if (!clean) return list
-  return [...list, { id: `n${now.toString(36)}${list.length}`, text: clean, isDone: false, at: now }].slice(-50)
+  if (!clean || list.some(g => g.text === clean)) return list
+  const cut = clean.slice(0, 28)
+  const name = label?.trim() || (clean.length > 28 ? (cut.lastIndexOf(' ') > 10 ? cut.slice(0, cut.lastIndexOf(' ')) : cut.slice(0, 27)) + '…' : clean)
+  return [...list, { label: name, text: clean }].slice(0, 24)
 }
 
-export const toggleNote = (list: Note[], id: string): Note[] => list.map(n => (n.id === id ? { ...n, isDone: !n.isDone } : n))
+// {plan} becomes the open plan's path (the newest one not yet verified); without one it stays for the person to fill
+export const fillPlan = (text: string, plan: string | null) => (plan ? text.replaceAll('{plan}', plan) : text)
 
-// Open notes first, in the order they were written; finished ones after them
-export const sortNotes = (list: Note[]): Note[] => [...list.filter(n => !n.isDone), ...list.filter(n => n.isDone)]
-
-export function describeNotes(list: Note[]): string {
-  if (list.length === 0) return ''
-  return [
-    "The user's own notes (their list; read them, never change them):",
-    ...list.map(n => `  [${n.isDone ? 'x' : ' '}] ${n.text}`),
-  ].join('\n')
-}
-
-async function changeNotes($: EngineInterface, fn: (list: Note[]) => Note[]) {
-  await update($, notes, fn)
-  // Saving is a convenience: a store or git that fails never stops the board
+async function changeGriffe($: EngineInterface, fn: (list: Griff[]) => Griff[]) {
+  await update($, griffe, fn)
   try {
-    await $.store.set(await storeKey($), { notes: await read($, notes) } satisfies Saved)
+    await $.store.set(GRIFFE_KEY, await read($, griffe))
   } catch {}
+}
+
+// The plan a Griff's {plan} points at, relative to the session folder
+async function openPlan($: EngineInterface): Promise<string | null> {
+  const codeEdit = await read($, lastCodeEditAt)
+  const open = (await read($, planStatus)).filter(s => stageOf(s, codeEdit).step !== 'done')
+  const last = open.at(-1) ?? (await read($, planStatus)).at(-1)
+  return last ? relative($, last.path) : null
+}
+
+async function putGriff($: EngineInterface, g: Griff) {
+  await put($, fillPlan(g.text, await openPlan($)))
 }
 
 // "vor 2 h", "vor 3 Tagen"
@@ -654,16 +654,8 @@ export function ago(ms: number): string {
 
 // Relative to the session folder, for commands the person reads
 async function relative($: EngineInterface, path: string) {
-  const cwd = (await $.session.cwd()).replace(/\/$/, '') + '/'
+  const cwd = (await $.session.cwd().catch(() => '')).replace(/\/$/, '') + '/'
   return path.startsWith(cwd) ? path.slice(cwd.length) : path
-}
-
-// The step a notice asks for, put in the prompt box: the integrate command, or closing the gaps
-async function act($: EngineInterface, n: Notice) {
-  const rel = await relative($, n.path)
-  if (n.kind === 'review') await put($, `/workflow:plan-integrate-review ${rel}`)
-  else if (n.kind === 'gaps') await put($, `Lies ${rel.replace(/\.md$/, '.verify.md')} und schließe die Lücken im Rahmen des Plans.`)
-  await update($, notices, list => list.filter(x => !(x.path === n.path && x.kind === n.kind)))
 }
 
 // The mode rides on every classic hook's input; keep the latest
@@ -715,6 +707,7 @@ async function restoreBoard($: EngineInterface, id: string) {
   await update($, artifacts, () => saved.artifacts)
   await update($, log, () => saved.log)
   await update($, plans, () => saved.plans)
+  await update($, trail, () => saved.trail ?? [])
 }
 
 // "Review #2 · Sol · gegen v3 · 1 kritisch", or null before the first review
@@ -744,10 +737,9 @@ export type Intent =
   | { do: 'answer'; id: string; option: string }
   | { do: 'reply' | 'explain' | 'dismiss'; id: string }
   | { do: 'ask'; ids?: string[] }
-  | { do: 'note.add'; text: string }
-  | { do: 'note.toggle' | 'note.remove'; id: string }
-  | { do: 'notes.clearDone' | 'todos.clearDone' | 'refresh' }
-  | { do: 'notice.act' | 'notice.dismiss'; path: string; kind: Notice['kind'] }
+  | { do: 'griff.put' | 'griff.remove'; index: number }
+  | { do: 'griff.add'; text: string; label?: string }
+  | { do: 'todos.clearDone' | 'refresh' }
 
 // Everything the sidebar draws, with each plan's stage and next steps worked out already
 async function snapshot($: EngineInterface, ended = false) {
@@ -755,6 +747,7 @@ async function snapshot($: EngineInterface, ended = false) {
   const status = await read($, planStatus)
   const codeEdit = await read($, lastCodeEditAt)
   const plansOut = []
+  const plan = await openPlan($)
   for (const s of status) {
     const stage = stageOf(s, codeEdit)
     const rel = await relative($, s.path)
@@ -768,6 +761,9 @@ async function snapshot($: EngineInterface, ended = false) {
       steps: pipeline(stage.step),
       next: nextSteps(s, stage, rel),
       review: reviewLine(s),
+      latestReview: s.latestReview,
+      reviewedVersion: s.reviewedVersion ?? null,
+      reviewBy: s.reviewBy ?? null,
       verify: s.verifyResult ? { result: s.verifyResult, version: s.verifiedVersion } : null,
       files: [
         { label: s.planVersion ? `Plan v${s.planVersion}` : 'Plan', path: s.path, exists: s.exists },
@@ -784,8 +780,7 @@ async function snapshot($: EngineInterface, ended = false) {
     mode: await read($, mode),
     ...board,
     plans: plansOut,
-    notices: await read($, notices),
-    notes: sortNotes(await read($, notes)),
+    griffe: (await read($, griffe)).map(g => ({ ...g, text: fillPlan(g.text, plan) })),
   }
 }
 
@@ -843,24 +838,18 @@ async function handle($: EngineInterface, x: Intent) {
       const all = await read($, decisions)
       return askAbout($, x.ids?.length ? all.filter(d => x.ids!.includes(d.id)) : all)
     }
-    case 'note.add':
-      return changeNotes($, list => addNote(list, x.text, Date.now()))
-    case 'note.toggle':
-      return changeNotes($, list => toggleNote(list, x.id))
-    case 'note.remove':
-      return changeNotes($, list => list.filter(n => n.id !== x.id))
-    case 'notes.clearDone':
-      return changeNotes($, list => list.filter(n => !n.isDone))
+    case 'griff.put': {
+      const g = (await read($, griffe))[x.index]
+      return g && putGriff($, g)
+    }
+    case 'griff.add':
+      return changeGriffe($, list => addGriff(list, x.text, x.label))
+    case 'griff.remove':
+      return changeGriffe($, list => list.filter((_, i) => i !== x.index))
     case 'todos.clearDone':
       return update($, todos, list => list.filter(t => !t.isDone))
     case 'refresh':
       return refresh($)
-    case 'notice.act': {
-      const n = (await read($, notices)).find(y => y.path === x.path && y.kind === x.kind)
-      return n && act($, n)
-    }
-    case 'notice.dismiss':
-      return update($, notices, list => list.filter(y => !(y.path === x.path && y.kind === x.kind)))
   }
 }
 
@@ -886,7 +875,7 @@ async function showInHerdr($: EngineInterface) {
 }
 
 const WEIGHTS: { weight: Weight; label: string; bullet: string; color?: string }[] = [
-  { weight: 'blocking', label: 'Blockiert die Arbeit', bullet: '●', color: 'error' },
+  { weight: 'blocking', label: 'Blockiert', bullet: '●', color: 'error' },
   { weight: 'important', label: 'Wichtig', bullet: '◆', color: 'warning' },
   { weight: 'optional', label: 'Optional', bullet: '◇' },
 ]
@@ -899,12 +888,14 @@ export const register: Register = on => {
     void $.clock.every(POLL_MS, async () => {
       if ((await read($, plans)).length > 0) await refresh($)
     })
-    // The person's notes come back on their branch; the board comes back only to a resumed session
-    if ((await read($, notes)).length === 0) {
+    // The person's Griffe are one list for every session; the board comes back only to a resumed session
+    if ((await read($, griffe)).length === 0) {
       try {
-        const saved = (await $.store.get(await storeKey($))) as Saved | undefined
-        if (saved?.notes?.length) await update($, notes, () => saved.notes ?? [])
-      } catch {}
+        const saved = (await $.store.get(GRIFFE_KEY)) as Griff[] | undefined
+        await update($, griffe, () => (Array.isArray(saved) ? saved : DEFAULT_GRIFFE))
+      } catch {
+        await update($, griffe, () => DEFAULT_GRIFFE)
+      }
     }
     // classic.SessionStart, which sets boardId, runs before this hook
     if (boardId && isResumed) {
@@ -944,10 +935,7 @@ export const register: Register = on => {
   // The board rides at the end of the system prompt, so it never has to be repeated in replies
   on('prompt.compose', async ($, e, next) => {
     const { sections } = await next(e)
-    const own = describeNotes(await read($, notes))
-    const text =
-      (own ? own + '\n' : '') +
-      describeBoard(await readBoard($), await read($, planStatus), await read($, mode), await read($, lastCodeEditAt))
+    const text = describeBoard(await readBoard($), await read($, planStatus), await read($, mode), await read($, lastCodeEditAt))
     return { sections: [...sections, { id: 'fokusboard:board', text, scope: 'session' }] }
   })
 
@@ -995,6 +983,7 @@ export const register: Register = on => {
     await update($, decisions, () => board.decisions)
     await update($, artifacts, () => board.artifacts)
     await update($, log, () => board.log)
+    await update($, trail, () => board.trail ?? [])
     for (const p of change.track_plans ?? []) await maybeTrack($, p, true)
     if (change.untrack_plans?.length) {
       const gone = new Set(await Promise.all(change.untrack_plans.map(async p => planOf(await absolute($, p)))))
@@ -1033,11 +1022,6 @@ export const register: Register = on => {
   // Plans Claude writes, edits or presents with ExitPlanMode join the board; code edits mark implementation
   on('tool.call', async ($, e, next) => {
     const target = e.tool === 'Write' || e.tool === 'Edit' ? (e as { file_path?: string }).file_path : undefined
-    // A review or verify this session writes (a sol loop) is marked before it lands, so the poll raises no notice
-    if (!e.agentId && target && /\.(review|verify)\.md$/.test(target)) {
-      const plan = planOf(await absolute($, target))
-      await update($, ownWrites, list => [...list.filter(w => w.path !== plan && Date.now() - w.at < OWN_WRITE_MS), { path: plan, at: Date.now() }])
-    }
     const ran = await next(e)
     if (e.agentId || !('result' in ran) || ran.isError) return ran
     let path: string | undefined = target
@@ -1077,52 +1061,155 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const elements = $.ui.resolve(e)
     const { Box, Text, Button, Link } = elements
-    // The mobile app draws no text field yet; there the notes are read-only
+    // The mobile app draws no text field yet; there Griffe can be used but not added
     const Input = 'Input' in elements ? elements.Input : undefined
-    // The remote surfaces draw vector icons; the terminal has no Svg and gets a glyph
-    const Svg = e.surface !== 'terminal' && 'Svg' in elements ? elements.Svg : undefined
     // The terminal frames the whole board; inside it, one cell of padding on every side
     const isTerminal = e.surface === 'terminal'
     const frame = isTerminal ? 2 : 0
     const inner = Math.max(10, e.props.bodyColumns - 2 - frame)
-    const { thread: th, topic: tp, todos: allTodos, decisions: allDecisions, artifacts: allArtifacts } = await readBoard($)
+    const { thread: th, topic: tp, todos: allTodos, decisions: allDecisions, artifacts: allArtifacts, trail: topicTrail = [] } = await readBoard($)
     const status = await read($, planStatus)
-    const currentMode = await read($, mode)
-    const codeEdit = await read($, lastCodeEditAt)
-    const allLog = await read($, log)
-    const isLogOpen = await read($, showLog)
-    const allNotices = await read($, notices)
-    const ownNotes = await read($, notes)
-    const ownDone = ownNotes.filter(n => n.isDone).length
-    const cwd = (await $.session.cwd().catch(() => '')).replace(/\/$/, '') + '/'
-    const rel = (path: string) => (path.startsWith(cwd) ? path.slice(cwd.length) : path)
+    const ownGriffe = await read($, griffe)
+    const isDoneHidden = await read($, hideDone)
+    const plan = await openPlan($)
     const now = Date.now()
     const doneCount = allTodos.filter(t => t.isDone).length
 
-    // One label style for every section: dim uppercase, the count beside it in the section's colour
-    // The terminal counts cells, so its rule is drawn to the exact width (no "…" from truncation);
-    // the desktop's proportional font cannot be counted, so there a long rule is clipped by its box
-    const header = (title: string, count: string, color?: string, width = inner) => {
-      const label = title.toUpperCase() + (count ? '  ' + count : '') + ' '
-      return (
-        <Box flexDirection="row" flexGrow={1} flexShrink={1}>
+    // Section label: dim uppercase, the rule to the pane's edge (the terminal counts cells; elsewhere it is clipped)
+    const header = (title: string, right = '', width = inner) => (
+      <Box flexDirection="row" width={width} marginBottom={1}>
+        <Box flexShrink={0}>
+          <Text bold>{title.toUpperCase() + ' '}</Text>
+        </Box>
+        <Box flexGrow={1} flexShrink={1} overflow="hidden">
+          <Text dimColor wrap="truncate">
+            {'─'.repeat(isTerminal ? Math.max(0, width - title.length - 1 - (right ? right.length + 1 : 0)) : 200)}
+          </Text>
+        </Box>
+        {right && (
           <Box flexShrink={0}>
-            <Text dimColor>
-              {title.toUpperCase()}
-              {count && <Text color={color}>{'  ' + count}</Text>}
-              {' '}
-            </Text>
+            <Text dimColor>{' ' + right}</Text>
           </Box>
-          <Box flexGrow={1} flexShrink={1} overflow="hidden">
-            <Text dimColor wrap="truncate">
-              {'─'.repeat(isTerminal ? Math.max(0, width - label.length) : 200)}
+        )}
+      </Box>
+    )
+    // A row whose glyph sits in a fixed column, so wrapped lines indent under the text
+    const row = (glyph: string, text: string, opts: { color?: string; isDim?: boolean; isBold?: boolean; right?: string; strike?: boolean } = {}) => (
+      <Box flexDirection="row" alignItems="flex-start" width={inner}>
+        <Box width={3} flexShrink={0}>
+          <Text color={opts.color} dimColor={opts.isDim}>
+            {glyph}
+          </Text>
+        </Box>
+        <Box flexShrink={1} flexGrow={1}>
+          <Text dimColor={opts.isDim} bold={opts.isBold} strikethrough={opts.strike} wrap="wrap">
+            {text}
+          </Text>
+        </Box>
+        {opts.right && (
+          <Box flexShrink={0} marginLeft={1}>
+            <Text dimColor>{opts.right}</Text>
+          </Box>
+        )}
+      </Box>
+    )
+    const since = (at?: number) => (at ? ago(now - at).replace(/^vor /, 'seit ') : '')
+
+    // Head: what the conversation is about, one dot per topic (the current one in the accent)
+    const dots = [...topicTrail.map(() => '•'), ...(tp ? ['•'] : [])].slice(-5)
+    const head = (th || tp) && (
+      <Box flexDirection="row" width={inner} marginBottom={1}>
+        <Box flexShrink={1} flexGrow={1}>
+          <Text bold wrap="wrap">
+            {th?.title ?? tp?.title}
+          </Text>
+        </Box>
+        {dots.length > 1 && (
+          <Box flexShrink={0} marginLeft={1}>
+            <Text dimColor>{dots.slice(0, -1).join('')}</Text>
+            <Text color="claude">•</Text>
+          </Box>
+        )}
+      </Box>
+    )
+
+    // Jetzt: the current topic, not boxed in
+    const nowBlock = tp ? (
+      <Box flexDirection="column" width={inner} marginBottom={1}>
+        <Box flexDirection="row" width={inner}>
+          <Box flexGrow={1}>
+            <Text color="claude">◉ JETZT</Text>
+          </Box>
+          <Text dimColor>{since(tp.at)}</Text>
+        </Box>
+        <Text bold wrap="wrap">
+          {tp.title}
+        </Text>
+        <Text dimColor wrap="wrap">
+          {tp.summary}
+        </Text>
+        {tp.points.map(p => row(' ·', p, { isDim: true }))}
+      </Box>
+    ) : (
+      <Box width={inner} marginBottom={1}>
+        <Text dimColor wrap="wrap">
+          Noch kein Thema. Claude setzt es, sobald das Gespräch eins hat.
+        </Text>
+      </Box>
+    )
+
+    // One open question: kind and age, the question and its context, one row per answer with its note, then the quiet actions
+    const order = { blocking: 0, important: 1, optional: 2 } as const
+    const questions = [...allDecisions].sort((x, y) => order[x.weight ?? 'important'] - order[y.weight ?? 'important'])
+    const questionCard = (d: Decision) => {
+      const w = WEIGHTS.find(x => x.weight === (d.weight ?? 'important'))!
+      const opts = (d.options ?? []).map((o, i) => ({ o, note: d.notes?.[i] ?? '' }))
+      return (
+        <Box flexDirection="column" width={inner} marginBottom={1}>
+          <Box flexDirection="row" width={inner}>
+            <Box flexGrow={1}>
+              <Text color={w.color} dimColor={!w.color}>
+                {w.bullet + ' ' + w.label.toUpperCase()}
+              </Text>
+            </Box>
+            {d.at !== undefined && <Text dimColor>{ago(now - d.at)}</Text>}
+          </Box>
+          <Text bold wrap="wrap">
+            {d.text}
+          </Text>
+          {d.context && (
+            <Text dimColor wrap="wrap">
+              {d.context}
             </Text>
+          )}
+          {opts.map(({ o, note }, i) => (
+            <Box flexDirection="column" width={inner} paddingLeft={2}>
+              <Box flexDirection="row" width={inner - 2}>
+                <Box flexGrow={1} flexShrink={1}>
+                  <Button key={`opt:${d.id}:${i}`} label={o} plain={o !== d.recommended || undefined} onPress={() => put($, `Zu „${d.text}“: ${o}`)} />
+                </Box>
+                {o === d.recommended && <Text color="claude">{' Empfohlen'}</Text>}
+              </Box>
+              {note && (
+                <Box paddingLeft={1}>
+                  <Text dimColor wrap="wrap">
+                    {note}
+                  </Text>
+                </Box>
+              )}
+            </Box>
+          ))}
+          {d.recommended && !d.options?.includes(d.recommended) && <Text dimColor wrap="wrap">{'Empfehlung: ' + d.recommended}</Text>}
+          <Box flexDirection="row" flexWrap="wrap" gap={2}>
+            <Button key={'reply:' + d.id} label="Eigene Antwort" plain dimColor onPress={() => replyTo($, d)} />
+            <Button key={'explain:' + d.id} label="Erklären" plain dimColor onPress={() => explain($, d)} />
           </Box>
         </Box>
       )
     }
-    // A ten-cell bar of finished todos
-    const progress = (done: number, total: number) => {
+
+    // Todos: every one stays; the header carries the bar and the count; done ones can be hidden
+    const bar = (done: number, total: number) => {
       const full = total ? Math.round((done / total) * 10) : 0
       return (
         <Text>
@@ -1131,77 +1218,35 @@ export const register: Register = on => {
         </Text>
       )
     }
-    const empty = (text: string) => <Text dimColor>  {text}</Text>
-    // The bullet sits in a fixed column at the top of its row, so wrapped lines indent under the text
-    const item = (bullet: string, text: string, width: number, isDim = false, color?: string, isBold = false, textColor = color) => (
-      <Box flexDirection="row" alignItems="flex-start" width={width}>
-        <Box width={4} flexShrink={0}>
-          <Text dimColor={isDim} color={color}>{'  ' + bullet}</Text>
-        </Box>
-        <Box flexShrink={1} flexGrow={1}>
-          <Text dimColor={isDim} color={textColor} bold={isBold} wrap="wrap">
-            {text}
-          </Text>
-        </Box>
-      </Box>
-    )
-
-    // The topic card: a rounded frame in the accent colour, so it reads as the headline of the pane
-    const topicCard = tp ? (
-      <Box flexDirection="column" width={inner}>
-        <Box width={inner} marginBottom={1}>{header('Aktuell', '')}</Box>
-        <Box flexDirection="row" alignItems="flex-start" width={inner}>
-          <Box width={2} flexShrink={0}>
-            {Svg ? <Svg source={FOCUS_ICON} alt="Thema" width={15} height={15} /> : <Text color="claude">◎</Text>}
-          </Box>
-          <Box flexShrink={1} flexGrow={1}>
-            <Text bold wrap="wrap">
-              {tp.title}
-            </Text>
-          </Box>
-        </Box>
-        <Box width={inner}>
-          <Text wrap="wrap">{tp.summary}</Text>
-        </Box>
-        {tp.points.map(p => (
-          <Box flexDirection="row" alignItems="flex-start" width={inner}>
-            <Box width={2} flexShrink={0}>
-              <Text color="claude">•</Text>
-            </Box>
-            <Box flexShrink={1} flexGrow={1}>
-              <Text dimColor wrap="wrap">
-                {p}
-              </Text>
-            </Box>
-          </Box>
-        ))}
-      </Box>
-    ) : th ? null : (
-      <Box width={inner} marginBottom={1}>
-        <Text dimColor wrap="wrap">
-          Noch kein Thema. Claude setzt es, sobald das Gespräch eins hat.
-        </Text>
-      </Box>
-    )
-
-    // The anchor of the conversation: what it is about overall, read before the current step
-    const threadBlock = th ? (
+    const shownTodos = isDoneHidden ? allTodos.filter(t => !t.isDone) : allTodos
+    const todoBlock = allTodos.length > 0 && (
       <Box flexDirection="column" width={inner} marginBottom={1}>
-        <Box width={inner} marginBottom={1}>{header('Worum es geht', '')}</Box>
-        <Text bold color="claude" wrap="wrap">
-          {th.title}
-        </Text>
-        <Box width={inner}>
-          <Text wrap="wrap">{th.goal}</Text>
+        <Box flexDirection="row" width={inner} marginBottom={1}>
+          <Text bold>{'TODOS '}</Text>
+          <Box flexGrow={1}>{bar(doneCount, allTodos.length)}</Box>
+          <Text dimColor>{`${doneCount}/${allTodos.length}`}</Text>
         </Box>
+        {shownTodos.map(t =>
+          t.isDone
+            ? row('✓', t.text, { color: 'success', isDim: true, strike: true })
+            : t.isActive
+              ? row('▸', t.text, { color: 'suggestion', isBold: true, right: since(t.startedAt) })
+              : row('○', t.text, { isDim: true }),
+        )}
+        {doneCount > 0 && (
+          <Button
+            key="toggle-done"
+            label={isDoneHidden ? `${doneCount} erledigte einblenden` : 'Erledigte ausblenden'}
+            plain
+            dimColor
+            onPress={() => update($, hideDone, v => !v)}
+          />
+        )}
       </Box>
-    ) : null
+    )
 
-    const TONE = { ok: 'success', wait: undefined, warn: 'warning', busy: 'suggestion' } as const
-    const isPlanMode = currentMode === 'plan'
-    // The terminal opens file:// links itself; the desktop draws only https links, so there a button opens the file
-    const fileLink = (href: string, label: string, isThere: boolean) => {
-      if (!isThere) return <Text dimColor>{label}</Text>
+    // Plans as a small file tree: plan and version, its review and verify beneath; a click opens the file
+    const fileLink = (href: string, label: string) => {
       if (e.surface === 'terminal') {
         return (
           <Text>
@@ -1211,248 +1256,77 @@ export const register: Register = on => {
       }
       return <Button key={'open:' + href} label={label} plain onPress={() => openFile($, href)} />
     }
-
-    // One block per open plan: name and version; the step as dots and words; the review in one line;
-    // what to do next as buttons (Sol or by hand); the three files
-    const planBlock = (s: PlanStatus) => {
-      const stage = stageOf(s, codeEdit)
-      const base = s.path.replace(/\.md$/, '')
-      const steps = pipeline(stage.step)
-      const at = steps.findIndex(x => x.state === 'current')
-      const next = nextSteps(s, stage, rel(s.path))
-      const review = reviewLine(s)
-      return (
-        <Box flexDirection="column" width={inner} marginBottom={1}>
-          <Box flexDirection="row" width={inner}>
-            <Box flexShrink={1} flexGrow={1}>
-              <Text bold wrap="truncate-middle">
-                {'  ' + s.name}
-              </Text>
-            </Box>
-            {s.planVersion !== null && (
-              <Box flexShrink={0}>
-                <Text dimColor>{' v' + s.planVersion}</Text>
-              </Box>
-            )}
-          </Box>
-          <Box flexDirection="row" alignItems="flex-start" width={inner} paddingLeft={2}>
-            <Box flexShrink={0}>
-              <Text>
-                {steps.map(x => (
-                  <Text
-                    color={x.state === 'current' ? TONE[stage.tone] ?? 'claude' : x.state === 'passed' ? 'success' : undefined}
-                    dimColor={x.state === 'ahead'}
-                  >
-                    {x.state === 'passed' ? '●' : x.state === 'current' ? '◉' : '○'}
-                  </Text>
-                ))}
-                {'  '}
-              </Text>
-            </Box>
-            <Box flexShrink={1} flexGrow={1}>
-              <Text color={TONE[stage.tone]} wrap="wrap">
-                {(at >= 0 ? `${at + 1}/5 ${steps[at]!.label}: ` : '') + stage.label}
-              </Text>
-            </Box>
-          </Box>
-          {review && (
-            <Box paddingLeft={2} width={inner}>
-              <Text dimColor wrap="wrap">
-                {review}
-              </Text>
-            </Box>
-          )}
-          {s.verifyResult && (
-            <Box paddingLeft={2} width={inner}>
-              <Text color={s.verifyResult === 'vollständig' ? 'success' : 'warning'} wrap="wrap">
-                {`Verify: ${s.verifyResult} (gegen v${s.verifiedVersion})`}
-              </Text>
-            </Box>
-          )}
-          {next.buttons.length > 0 && (
-            <Box flexDirection="row" flexWrap="wrap" paddingLeft={2} gap={2} width={inner}>
-              {next.buttons.map(b => (
-                <Button key={`step:${b.key}:${s.path}`} label={b.label} onPress={() => put($, b.text)} />
-              ))}
-            </Box>
-          )}
-          {next.hint && (
-            <Box paddingLeft={2} width={inner}>
-              <Text dimColor wrap="wrap">
-                {next.hint}
-              </Text>
-            </Box>
-          )}
-          <Box flexDirection="row" flexWrap="wrap" paddingLeft={2} width={inner}>
-            <Text dimColor>{'↗ '}</Text>
-            {fileLink(s.path, s.planVersion ? `Plan v${s.planVersion}` : 'Plan', s.exists)}
-            <Text dimColor>{' · '}</Text>
-            {fileLink(base + '.review.md', s.latestReview ? `Review #${s.latestReview}` : 'Review', s.hasReview)}
-            <Text dimColor>{' · '}</Text>
-            {fileLink(base + '.verify.md', 'Verify', s.hasVerify)}
-          </Box>
+    const treeRow = (glyph: string, href: string, label: string, right: string, isSub = false) => (
+      <Box flexDirection="row" width={inner} paddingLeft={isSub ? 2 : 0}>
+        <Box width={3} flexShrink={0}>
+          <Text dimColor>{glyph}</Text>
         </Box>
-      )
-    }
-    // A finished plan is one line
-    const doneLine = (s: PlanStatus) => (
-      <Box flexDirection="row" alignItems="flex-start" width={inner}>
-        <Box width={4} flexShrink={0}>
-          <Text color="success">{'  ✓'}</Text>
+        <Box flexGrow={1} flexShrink={1}>
+          {fileLink(href, label)}
         </Box>
-        <Box flexShrink={1} flexGrow={1} flexDirection="row" flexWrap="wrap">
-          {fileLink(s.path, s.name, s.exists)}
-          <Text dimColor>{` v${s.planVersion ?? '?'} · vollständig verifiziert`}</Text>
-        </Box>
+        {right && <Text dimColor>{' ' + right}</Text>}
+      </Box>
+    )
+    const planTree = status.length > 0 && (
+      <Box flexDirection="column" width={inner} marginBottom={1}>
+        {header('Pläne')}
+        {status.map(s => {
+          const base = s.path.replace(/\.md$/, '')
+          return (
+            <Box flexDirection="column" width={inner}>
+              {treeRow('▤', s.path, s.name + '.md', s.planVersion ? `v${s.planVersion}` : '')}
+              {s.hasReview &&
+                treeRow('└', base + '.review.md', 'review.md', [s.latestReview && `#${s.latestReview}`, s.reviewedVersion && `gegen v${s.reviewedVersion}`].filter(Boolean).join(' · '), true)}
+              {s.hasVerify &&
+                treeRow('└', base + '.verify.md', 'verify.md', [s.verifiedVersion && `v${s.verifiedVersion}`, s.verifyResult].filter(Boolean).join(' · '), true)}
+            </Box>
+          )
+        })}
       </Box>
     )
 
-    // What changed in a plan outside this session, with the step it asks for
-    const noticeTone = { review: 'warning', gaps: 'error', verified: 'success' } as const
-    const noticeRow = (n: Notice) => (
+    const artifactBlock = allArtifacts.length > 0 && (
       <Box flexDirection="column" width={inner} marginBottom={1}>
-        <Box flexDirection="row" alignItems="flex-start" width={inner}>
-          <Box width={2} flexShrink={0}>
-            <Text color={noticeTone[n.kind]}>●</Text>
-          </Box>
-          <Box flexShrink={1} flexGrow={1}>
-            <Text color={noticeTone[n.kind]} bold wrap="wrap">
-              {n.label}
-            </Text>
-          </Box>
-        </Box>
-        <Box flexDirection="row" paddingLeft={2} gap={2}>
-          {n.kind === 'review' && <Button key={'act:' + n.kind + n.path} label="Einarbeiten" onPress={() => act($, n)} />}
-          {n.kind === 'gaps' && <Button key={'act:' + n.kind + n.path} label="Nachbessern" onPress={() => act($, n)} />}
-          <Button
-            key={'dismiss:' + n.kind + n.path}
-            label="ausblenden"
-            plain
-            dimColor
-            onPress={() => update($, notices, list => list.filter(x => !(x.path === n.path && x.kind === n.kind)))}
-          />
-        </Box>
-      </Box>
-    )
-
-    // One open question: the question, why it matters, its options (a click answers), and what else to do with it
-    const questionCard = (d: Decision, w: (typeof WEIGHTS)[number]) => (
-      <Box flexDirection="column" width={inner} marginBottom={1}>
-        {item(w.bullet, d.text, inner, w.weight === 'optional', w.color, w.weight !== 'optional', undefined)}
-        {d.context && (
-          <Box paddingLeft={4} width={inner}>
-            <Text dimColor wrap="wrap">
-              {d.context}
-            </Text>
-          </Box>
-        )}
-        {d.options && d.options.length > 0 && (
-          <Box flexDirection="row" flexWrap="wrap" paddingLeft={4} gap={1} width={inner}>
-            {d.options.map((o, i) => (
-              <Button
-                key={`opt:${d.id}:${i}`}
-                label={o === d.recommended ? `${o} ★` : o}
-                // The recommended option is the one drawn as a full button
-                plain={o !== d.recommended || undefined}
-                onPress={() => put($, `Zu „${d.text}“: ${o}`)}
-              />
-            ))}
-          </Box>
-        )}
-        {d.recommended && !d.options?.includes(d.recommended) && (
-          <Box paddingLeft={4} width={inner}>
-            <Text dimColor wrap="wrap">
-              {'★ Empfehlung: ' + d.recommended}
-            </Text>
-          </Box>
-        )}
-        <Box flexDirection="row" flexWrap="wrap" paddingLeft={4} gap={2}>
-          <Button key={'reply:' + d.id} label="↩ Antworten" plain dimColor onPress={() => replyTo($, d)} />
-          <Button key={'ask:' + d.id} label="? Frag mich" plain dimColor onPress={() => askAbout($, [d])} />
-          <Button key={'explain:' + d.id} label="✦ Erklär mir das" plain dimColor onPress={() => explain($, d)} />
-          <Button key={'drop:' + d.id} label="× verwerfen" plain dimColor onPress={() => dismiss($, d)} />
-        </Box>
-      </Box>
-    )
-    const groups = WEIGHTS.map(w => ({ w, list: allDecisions.filter(d => (d.weight ?? 'important') === w.weight) })).filter(g => g.list.length > 0)
-    const blocking = groups.find(g => g.w.weight === 'blocking')?.list.length ?? 0
-
-    // The decision log: question, the answer beneath it, when; folded to the latest
-    const shownLog = (isLogOpen ? [...allLog].reverse() : allLog.slice(-1)).slice(0, 30)
-    const logEntry = (x: LogEntry) => (
-      <Box flexDirection="column" width={inner} marginBottom={1}>
-        <Box flexDirection="row" alignItems="flex-start" width={inner}>
-          <Box width={2} flexShrink={0}>
-            <Text color="success">✓</Text>
-          </Box>
-          <Box flexShrink={1} flexGrow={1}>
-            <Text dimColor wrap="wrap">
-              {x.text}
-            </Text>
-          </Box>
-        </Box>
-        <Box flexDirection="row" alignItems="flex-start" width={inner} paddingLeft={2}>
-          <Box width={2} flexShrink={0}>
-            <Text color="success">↳</Text>
-          </Box>
-          <Box flexShrink={1} flexGrow={1}>
-            <Text wrap="wrap">
-              {x.answer || 'beantwortet'}
-              <Text dimColor>{'  · ' + ago(now - x.at)}</Text>
-            </Text>
-          </Box>
-        </Box>
-      </Box>
-    )
-
-    // The person's own notes and todos: typed here, ticked off here, never touched by Claude
-    const notesBlock = (
-      <Box flexDirection="column" width={inner} marginBottom={1}>
-        <Box width={inner} marginBottom={1}>
-          {header('Meine Notizen', ownNotes.length ? `${ownNotes.length - ownDone}/${ownNotes.length}` : '', ownNotes.length && !ownNotes.some(n => !n.isDone) ? 'success' : undefined)}
-        </Box>
-        {Input && (
-          <Box width={inner}>
-            <Input
-              key={'note-input-' + ownNotes.length}
-              placeholder="Notiz oder Todo hinzufügen…"
-              submitLabel="hinzufügen"
-              onSubmit={(text: string) => changeNotes($, list => addNote(list, text, Date.now()))}
-            />
-          </Box>
-        )}
-        {sortNotes(ownNotes).map(n => (
+        {header('Artefakte')}
+        {allArtifacts.map(a => (
           <Box flexDirection="row" alignItems="flex-start" width={inner}>
             <Box width={3} flexShrink={0}>
-              <Button
-                key={'note-toggle:' + n.id}
-                label={n.isDone ? '✓' : '○'}
-                plain
-                onPress={() => changeNotes($, list => toggleNote(list, n.id))}
-              />
+              <Text dimColor>{artifactKind(a.href).glyph}</Text>
             </Box>
-            <Box flexShrink={1} flexGrow={1}>
-              <Text wrap="wrap" dimColor={n.isDone} strikethrough={n.isDone}>
-                {n.text}
+            <Box flexDirection="column" flexShrink={1} flexGrow={1}>
+              <Text wrap="truncate-middle">
+                <Link href={a.href} label={a.label} />
               </Text>
-            </Box>
-            <Box flexShrink={0} marginLeft={1}>
-              <Button key={'note-del:' + n.id} label="×" plain dimColor onPress={() => changeNotes($, list => list.filter(x => x.id !== n.id))} />
+              <Text dimColor wrap="truncate">
+                {hostOf(a.href)}
+              </Text>
             </Box>
           </Box>
         ))}
-        {ownDone > 0 && (
-          <Box width={inner} justifyContent="flex-end">
-            <Button key="notes-clear-done" label="erledigte entfernen" plain dimColor onPress={() => changeNotes($, list => list.filter(n => !n.isDone))} />
+      </Box>
+    )
+
+    // Griffe: prompts sent again and again; a click puts one in the prompt box
+    const griffBlock = (
+      <Box flexDirection="column" width={inner} marginBottom={1}>
+        {header('Griffe')}
+        <Box flexDirection="row" flexWrap="wrap" gap={1} width={inner}>
+          {ownGriffe.map((g, i) => (
+            <Button key={'griff:' + i} label={g.label} onPress={() => put($, fillPlan(g.text, plan))} />
+          ))}
+        </Box>
+        {Input && (
+          <Box width={inner} marginTop={1}>
+            <Input
+              key={'griff-input-' + ownGriffe.length}
+              placeholder="+ Griff hinzufügen…"
+              submitLabel="hinzufügen"
+              onSubmit={(text: string) => changeGriffe($, list => addGriff(list, text))}
+            />
           </Box>
         )}
       </Box>
     )
-
-    // Open work first; finished plans fold into one line each below it
-    const openPlans = status.filter(s => stageOf(s, codeEdit).step !== 'done')
-    const donePlans = status.filter(s => stageOf(s, codeEdit).step === 'done')
-    const showWorkflow = isPlanMode || status.length > 0
 
     return (
       <Box
@@ -1466,101 +1340,19 @@ export const register: Register = on => {
         borderColor={isTerminal ? 'claude' : undefined}
         borderDimColor={isTerminal}
       >
-        {allNotices.map(noticeRow)}
-        {threadBlock}
-        {topicCard}
-        {(th || tp) && <Text> </Text>}
-
-        {/* Open questions come right after the topic: they are what the person acts on */}
-        {allDecisions.length > 0 && (
-          <Box flexDirection="row" width={inner} marginBottom={1}>
-            {header('Offene Fragen', blocking ? `${allDecisions.length} · ${blocking} blockiert` : String(allDecisions.length), blocking ? 'error' : 'warning', allDecisions.length > 1 ? inner - 14 : inner)}
-            {allDecisions.length > 1 && <Button key="ask-all" label=" Alle stellen" hotkey="a" plain onPress={() => askAbout($, allDecisions)} />}
+        {head}
+        {nowBlock}
+        {questions.length > 0 && (
+          <Box flexDirection="row" width={inner}>
+            <Box flexGrow={1}>{header('Fragen', '', questions.length > 1 ? inner - 18 : inner)}</Box>
+            {questions.length > 1 && <Button key="ask-all" label=" alle beantworten →" hotkey="a" plain dimColor onPress={() => askAbout($, allDecisions)} />}
           </Box>
         )}
-        {groups.map(g => (
-          <Box flexDirection="column" width={inner}>
-            {groups.length > 1 && (
-              <Text color={g.w.color} dimColor={!g.w.color} bold>
-                {'  ' + g.w.label}
-              </Text>
-            )}
-            {g.list.map(d => questionCard(d, g.w))}
-          </Box>
-        ))}
-
-        {notesBlock}
-
-        {showWorkflow && (
-          <Box flexDirection="row" justifyContent="space-between" width={inner} marginBottom={1}>
-            {header('Plan-Workflow', status.length ? String(status.length) : '', undefined, inner - (isPlanMode ? 12 : 3))}
-            <Text> </Text>
-            {isPlanMode ? (
-              <Text bold color="planMode">
-                ◉ Planmodus
-              </Text>
-            ) : (
-              <Button key="refresh-plans" label="↻" hotkey="r" plain dimColor onPress={() => refresh($)} />
-            )}
-          </Box>
-        )}
-        {showWorkflow && status.length === 0 && empty('Wir planen gerade; der Plan erscheint, sobald er gespeichert ist.')}
-        {openPlans.map(planBlock)}
-        {donePlans.map(doneLine)}
-        {showWorkflow && status.length > 0 && <Text> </Text>}
-
-        {allArtifacts.length > 0 && <Box width={inner} marginBottom={1}>{header('Artefakte', String(allArtifacts.length))}</Box>}
-        {allArtifacts.map(a => (
-          <Box flexDirection="row" alignItems="flex-start" width={inner}>
-            <Box width={4} flexShrink={0}>
-              <Text color="claude">{'  ↗'}</Text>
-            </Box>
-            <Box flexShrink={1} flexGrow={1}>
-              <Text wrap="truncate-middle">
-                <Link href={a.href} label={a.label} />
-              </Text>
-            </Box>
-          </Box>
-        ))}
-        {allArtifacts.length > 0 && <Text> </Text>}
-
-        {allLog.length > 0 && (
-          <Box flexDirection="row" width={inner} marginBottom={1}>
-            {header('Entschieden', String(allLog.length), 'success', allLog.length > 1 ? inner - 10 : inner)}
-            {allLog.length > 1 && (
-              <Button
-                key="toggle-log"
-                label={isLogOpen ? ' weniger' : ` alle ${allLog.length}`}
-                plain
-                dimColor
-                onPress={() => update($, showLog, v => !v)}
-              />
-            )}
-          </Box>
-        )}
-        {shownLog.map(logEntry)}
-
-        {allTodos.length > 0 && <Box width={inner} marginBottom={1}>{header('Todos', `${doneCount}/${allTodos.length}`, doneCount === allTodos.length ? 'success' : undefined)}</Box>}
-        {allTodos.length > 0 && (
-          <Box flexDirection="row" justifyContent="space-between" width={inner}>
-            {progress(doneCount, allTodos.length)}
-            {doneCount > 0 && (
-              <Button
-                key="clear-done"
-                label="erledigte weg"
-                hotkey="c"
-                plain
-                dimColor
-                onPress={() => update($, todos, list => list.filter(t => !t.isDone))}
-              />
-            )}
-          </Box>
-        )}
-        {allTodos.filter(t => !t.isDone).map(t => (t.isActive ? item('▸', t.text, inner, false, 'warning') : item('○', t.text, inner)))}
-        {/* Finished todos fold into one line so open work stays on top */}
-        {doneCount > 0 && <Text color="success">{`  ✓ ${doneCount} erledigt`}</Text>}
-
-        {allDecisions.length + allTodos.length === 0 && <Text dimColor>✓ Keine offenen Fragen, keine Todos.</Text>}
+        {questions.map(questionCard)}
+        {todoBlock}
+        {planTree}
+        {artifactBlock}
+        {griffBlock}
       </Box>
     )
   })
