@@ -133,6 +133,11 @@ they are connected, then Pinned, then this computer's spaces.
 
 - Click the header: select the space. Chevron: fold it (remembered). Folded, it shows no counts,
   only one mark for its most urgent agent that is waiting, done or working.
+- "+" and the fold chevron show on hover, side by side; an agent's sub-agent chevron too
+  (folded, it stays with its count).
+- The shown panes' frames take the selected space's color (faint, full when focused):
+  agents-icons rewrites the layout's pane border and focus colors via `layout.set` when the
+  space or its color changes.
 - "+" on hover: Terminal or an installed agent, started in that space. A new tab in a folded
   space unfolds it.
 - Right-click: the space menu. Drag: reorder. Drop an image or `.app`: its picture.
