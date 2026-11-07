@@ -498,6 +498,27 @@ export default class Agents extends View {
     });
   }
 
+  // Frames the shown panes in the selected space's color: every block of the layout that
+  // frames panes (content.pane with border and focus) gets it, faint as its border and full
+  // when focused. Only when the space or its color changed, and only if the layout differs.
+  paintPanes(hex) {
+    if (!hex || this.painted === hex) return;
+    this.painted = hex;
+    const tree = layout();
+    let changed = false;
+    const walk = (n) => {
+      const p = n?.content?.pane;
+      if (p?.border && p?.focus && (p.border.color !== hex + "59" || p.focus.color !== hex)) {
+        p.border.color = hex + "59";
+        p.focus.color = hex;
+        changed = true;
+      }
+      (n?.children ?? []).forEach(walk);
+    };
+    walk(tree);
+    if (changed) run("layout.set", { layout: tree });
+  }
+
   // indent: where the tree line starts, under the middle of the parent's program icon.
   // tint: the space's color for the tree lines while the parent row is selected.
   // first: right under the parent row, whose line starts at its edge instead of reaching
@@ -663,6 +684,8 @@ export default class Agents extends View {
     // terminalRows draws the same space pictures.
     this.spacePicFor = spacePic;
     this.spaceHexFor = spaceHex;
+    const shownSpace = spaces().find((s) => s.active)?.id;
+    if (shownSpace) this.paintPanes(spaceHex(shownSpace));
 
     const row = (a, i, subs = []) => {
       const pic = icon(a.program, 16, t.foreground);
@@ -762,7 +785,8 @@ export default class Agents extends View {
         .child(h_flex().flex_1().min_w(0).gap(5).items_center()
           .child(div().min_w(0).truncate().text_color(idle && !a.focused ? t.muted : t.foreground).when(a.focused, (el) => el.font_semibold()).child(name)))
         .when(Boolean(machine), el => el.child(div().text_size(10).text_color(t.dim).child(machine)))
-        .when(subs.length > 0, el => el.child(fold(a, subs)))
+        // The fold chevron only on hover; folded, it stays (it carries the count).
+        .when(subs.length > 0 && (this.hovered === a.address || this.folded.has(a.address)), el => el.child(fold(a, subs)))
         .when(this.hovered === a.address, el => el.child(h_flex().flex_none().gap(2).when(!isArchived, (el) => el.child(laterBtn)).child(archiveBtn).when(!isArchived, (el) => el.child(pin))))
         .when(this.hovered !== a.address && Boolean(when), el => el.child(div().flex_none().text_size(11).text_color(t.dim).child(duration(now - when))))
         .child(this.status(t, a, sectioned && !isPinned && !isLater && !isArchived));
@@ -921,8 +945,10 @@ export default class Agents extends View {
             .when(git?.ahead > 0, (el) => el.child(div().flex_none().text_color(t.ansi2).child(`↑${git.ahead}`)))
             .when(git?.behind > 0, (el) => el.child(div().flex_none().text_color(t.ansi1).child(`↓${git.behind}`))))))
         .when(top >= RANK.working, (el) => el.child(div().flex_none().mr(2).child(this.status(t, { status: SECTION_STATUS[top] }, true))))
-        .when(this.hoveredHeader === g.id, (el) => el.child(btn(`new-${g.id}`, `New terminal or agent in ${g.label}`, "mods/workspace-chrome/plus.svg", () => newIn(g.space, g.label))))
-        .child(btn(`fold-${g.id}`, open ? "Fold" : "Unfold", `mods/workspace-chrome/chevron-${open ? "down" : "right"}.svg`, (cx) => { this.toggleFold(g.id); cx.notify(); }));
+        // "+" and fold only on hover, side by side (the header's gap would part them).
+        .when(this.hoveredHeader === g.id, (el) => el.child(h_flex().flex_none().gap(0)
+          .child(btn(`new-${g.id}`, `New terminal or agent in ${g.label}`, "mods/workspace-chrome/plus.svg", () => newIn(g.space, g.label)))
+          .child(btn(`fold-${g.id}`, open ? "Fold" : "Unfold", `mods/workspace-chrome/chevron-${open ? "down" : "right"}.svg`, (cx) => { this.toggleFold(g.id); cx.notify(); }))));
     };
 
     // A group's header; it folds the group. Folded, it says how many and the most urgent state.
