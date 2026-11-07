@@ -9,7 +9,7 @@
 //
 //   thread title ··●        head: what the conversation is about, one dot per topic
 //   JETZT                   the current topic
-//   FRAGEN                  open questions, one row per answer
+//   (questions)             open questions without a heading, one row per answer
 //   TODOS ━━━━━━──── 3/5    every todo; finished ones can be hidden
 //   PLÄNE                   plan files as a tree: plan, review, verify with versions
 //   ARTEFAKTE               links with kind and host
@@ -28,10 +28,9 @@ const DIR = `${home()}/.local/state/fokusboard`;
 const ARTIFACTS = `${home()}/.local/state/herdr-artifacts/artifacts.jsonl`;
 const ICON = (name) => `mods/fokus/l-${name}.svg`;
 const MONO = "Geist Mono";
-// Golden-ratio type scale: labels and meta, text
-const XS = 10;
-const S = 16;
-// Griffe only: Marcus wants them between XS and S (off the 1.618 scale on purpose)
+// Sizes match the rest of Herdr (sidebar names 13, meta 11, terminal 12), not the web's 1.618 scale
+const XS = 11;
+const S = 13;
 const GRIFF = 12;
 const KEEP_INTENTS = 30;
 // Session sampling: how often, how far back, and when waiting on you turns into a pause
@@ -307,7 +306,7 @@ export default class Fokus extends View {
         h_flex()
           .gap(6)
           .items_center()
-          .child(svg(ICON("jetzt")).size(14).text_color(t.accent))
+          .child(svg(ICON("jetzt")).size(13).text_color(t.accent))
           .child(div().font_family(MONO).text_size(XS).font_semibold().text_color(t.accent).child("JETZT"))
           .child(div().flex_1())
           .child(this.meta(t.dim, since(tp.at))),
@@ -383,7 +382,7 @@ export default class Fokus extends View {
             h_flex()
               .gap(6)
               .items_center()
-              .child(svg(ICON(tag.icon)).size(14).text_color(tag.color))
+              .child(svg(ICON(tag.icon)).size(13).text_color(tag.color))
               .child(div().font_family(MONO).text_size(XS).font_semibold().text_color(tag.color).child(tag.label.toUpperCase()))
               .child(div().flex_1())
               .when(Boolean(d.at), (el) => el.child(this.meta(t.dim, ago(d.at)))),
@@ -424,7 +423,7 @@ export default class Fokus extends View {
         .child(
           svg(ICON(x.isDone ? "erledigt" : x.isActive ? "aktiv" : "offen"))
             .mt(2)
-            .size(16)
+            .size(14)
             .flex_none()
             .text_color(x.isDone ? t.dim : x.isActive ? busy : t.muted),
         )
@@ -520,7 +519,7 @@ export default class Fokus extends View {
       .cursor_pointer()
       .hover((s) => s.bg(t.hover))
       .on_click(() => exec("open", [a.href]))
-      .child(div().size(32).flex_none().flex().items_center().justify_center().rounded(9).bg(t.raised).text_color(t.muted).child(svg(ICON(kindOf(a.href))).size(18)))
+      .child(div().size(28).flex_none().flex().items_center().justify_center().rounded(8).bg(t.raised).text_color(t.muted).child(svg(ICON(kindOf(a.href))).size(15)))
       .child(
         v_flex()
           .flex_1()
@@ -743,8 +742,11 @@ export default class Fokus extends View {
           this.section(
             v_flex()
               .gap(8)
-              .child(this.label(t, "Fragen", questions.length > 1 ? this.quiet(t, "ask-all", "alle beantworten →", () => this.send({ do: "ask" })) : null))
-              .children(questions.map((d) => this.question(t, d))),
+              .children(questions.map((d) => this.question(t, d)))
+              // No heading: the cards speak for themselves; with several, one link answers them all
+              .when(questions.length > 1, (el) =>
+                el.child(h_flex().justify_end().child(this.quiet(t, "ask-all", "alle beantworten →", () => this.send({ do: "ask" })))),
+              ),
           ),
         ),
       )

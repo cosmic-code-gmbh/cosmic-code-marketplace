@@ -367,8 +367,9 @@ describe('session', () => {
       expect((await ui.find({ type: 'Text', text: 'Payment v3 fertigstellen' }))?.props.bold).toBe(true)
       expect((await ui.find({ type: 'Text', text: 'Payment v3' }))?.props.bold).toBe(true)
       expect(all.indexOf('Payment v3 fertigstellen')).toBeLessThan(all.indexOf('JETZT'))
-      expect(all.indexOf('JETZT')).toBeLessThan(all.indexOf('FRAGEN'))
-      expect(all.indexOf('FRAGEN')).toBeLessThan(all.indexOf('TODOS'))
+      expect(all.indexOf('JETZT')).toBeLessThan(all.indexOf('◆ WICHTIG'))
+      expect(all.indexOf('◆ WICHTIG')).toBeLessThan(all.indexOf('TODOS'))
+      expect(all).not.toContain('FRAGEN')
       expect(all).toContain('Checkout läuft, Rückgabeseite fertig.')
       expect(all).toContain('Stripe Sandbox')
       expect(all).toContain('◆ WICHTIG')
@@ -441,7 +442,6 @@ describe('session', () => {
     const all = await texts(ui)
     // Answered: gone from the pane; unanswered: still open
     expect(all).not.toContain('Staging zuerst?')
-    expect(all).toContain('FRAGEN')
     expect(all).toContain('Welcher Editor?')
     // A dismissed dialog leaves its questions on the board, without doubling them
     isDismissed = true
@@ -517,7 +517,7 @@ describe('session', () => {
       const ui = await $.ui.mount({ ...PANE, surface })
       const buttons = (await ui.findAll({ type: 'Button' })).map(b => b.props.label)
       expect(buttons).toContain('Eigene Antwort')
-      expect(buttons).toContain(' alle beantworten →')
+      expect(buttons).toContain('alle beantworten →')
       await ui.unmount()
     }
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
@@ -634,7 +634,6 @@ describe('session', () => {
     // The placeholder is a plain line, not a frame inside the frame
     expect((await ui.findAll({ type: 'Box' })).filter(b => b.props.borderStyle).length).toBe(1)
     expect(all).not.toContain('TODOS')
-    expect(all).not.toContain('FRAGEN')
   })
 
   test('finished todos can be hidden and shown again', async ($, on) => {

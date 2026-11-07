@@ -1375,13 +1375,13 @@ export const register: Register = on => {
       >
         {head}
         {nowBlock}
-        {questions.length > 0 && (
-          <Box flexDirection="row" width={inner}>
-            <Box flexGrow={1}>{header('Fragen', '', questions.length > 1 ? inner - 18 : inner)}</Box>
-            {questions.length > 1 && <Button key="ask-all" label=" alle beantworten →" hotkey="a" plain dimColor onPress={() => askAbout($, allDecisions)} />}
+        {/* Questions have no heading: the cards speak for themselves; with several, one link answers them all */}
+        {questions.map(questionCard)}
+        {questions.length > 1 && (
+          <Box flexDirection="row" width={inner} justifyContent="flex-end" marginBottom={1}>
+            <Button key="ask-all" label="alle beantworten →" hotkey="a" plain dimColor onPress={() => askAbout($, allDecisions)} />
           </Box>
         )}
-        {questions.map(questionCard)}
         {todoBlock}
         {planTree}
         {artifactBlock}

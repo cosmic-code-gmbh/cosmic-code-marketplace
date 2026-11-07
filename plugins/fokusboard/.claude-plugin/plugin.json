@@ -1,7 +1,7 @@
 {
   "name": "fokusboard",
   "displayName": "Fokusboard",
-  "version": "0.11.2",
+  "version": "0.11.3",
   "description": "Side pane with what the conversation is about, the current topic, open questions (weighted, one row per answer with a note), todos, plan files with their review and verify versions, artifacts and Griffe (saved prompts); in Herdr it feeds the herdr plugin's Fokus sidebar (built on sirkitree/pinboard, MIT)",
   "author": {
     "name": "Marcus Thor"
