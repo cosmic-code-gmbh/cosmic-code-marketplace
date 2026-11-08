@@ -12,7 +12,8 @@ plugin herdr                               mods/tabs-run      top bar: tabs fold
                                       │                       helpers, shelves
                                       │    mods/spaces-icons  the Icon & color… popup
                                       │    mods/menu-icons    right-click menus (space, agent, terminal)
-                                      │    mods/session-bar-icons  bottom bar: Claude left, git right
+                                      │    mods/pane-icons    pane header: program, folder, model · ctx
+                                      │    mods/session-bar-icons  bottom bar: git, Claude card
                                       │    mods/workspace-chrome-icons  sidebar footer without its line
                                       │    layouts/main-filetree.json
   skill artifacts-refresh ──┐         │    settings.json, keys.json
@@ -32,13 +33,18 @@ to Herdr's theme format. Pick one in Settings → Theme. Rex draws selections in
 one selection color, so each theme's selection is its background mixed 30 % toward the
 foreground.
 
-## Bottom bar
+## Pane header and bottom bar
+
+`mods/pane-icons` is a copy of Herdr's `pane` header (Herdr replaces its own `pane` on start, so
+the layout points at the copy). A Claude Code pane shows its model · effort, a ctx bar and the
+percent on the right, each pane its own, so split panes keep theirs. A click opens the Claude
+card with every meter (ctx / 5h / 7d).
 
 `mods/session-bar-icons` is a copy of `session-bar` from
-[cybertron288/herdr-mods](https://github.com/cybertron288/herdr-mods): the Claude chips (model,
-effort, ctx / 5h / 7d) sit on the left with the Claude Code robot as icon, folder, branch and git
-chips on the right. The meters still come from session-bar's Claude Code plugin, so
-`install.sh` keeps installing `session-bar` too.
+[cybertron288/herdr-mods](https://github.com/cybertron288/herdr-mods): the bottom bar keeps
+folder, branch and git chips on the right and draws the Claude card the header opens. The
+meters still come from session-bar's Claude Code plugin, so `install.sh` keeps installing
+`session-bar` too.
 
 ## Tabs fold away
 

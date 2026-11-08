@@ -4,9 +4,9 @@
 //
 // A bottom bar of chips for any Herdr layout. Right: the focused pane's folder,
 // its branch, and git chips (↑ to push, ↓ to pull, changed, staged, conflicts, stashes).
-// Left, while the focused pane runs Claude Code: model, effort, context window and the
-// ctx / 5h / 7d meters, which this mod's Claude Code plugin (session-bar/claude-plugin in herdr-mods) writes to
-// ~/.local/state/herdr-session-bar/<terminal>.json.
+// Claude Code's model, effort and ctx meter moved into each pane's header (pane-icons); this
+// mod still draws the Claude card that header opens (every meter, from the file session-bar's
+// Claude Code plugin writes to ~/.local/state/herdr-session-bar/<terminal>.json).
 // Chips act: changed opens filetree's Changed view, ↑ ↓ open a push / pull menu, the
 // Claude chips open a card with every number. Colors come from theme().
 import { View, div, svg } from "gpui-kit";
@@ -287,22 +287,8 @@ export default class SessionBar extends View {
       g?.conflicts ? chip("sb-conflicts", { icon: "triangle-alert", color: t.ansi1, tip: `${g.conflicts} with conflicts · open Changed`, onClick: () => this.openChanged() }, String(g.conflicts)) : null,
       g?.stash && mid ? chip("sb-stash", { icon: "archive", color: t.dim, tip: `${g.stash} stash${g.stash === 1 ? "" : "es"}` }, String(g.stash)) : null,
     ].filter(Boolean);
-    const meters = (i?.meters ?? []).filter((m) => wide || m.label === "ctx");
-    const router = isClaude(w.pane) ? this.routerState() : null;
-    const claudeCard = () => this.openPopup("claude", this.claudeCardHeight(i, router));
-    const routerChip = router ? chip("sb-router", { icon: "route", iconColor: router.on ? t.ansi2 : t.dim, color: router.on ? t.foreground : t.dim, tip: router.label, onClick: i ? claudeCard : null },
-      div().child("Router"), div().text_color(router.on ? t.ansi2 : t.dim).child(router.word)) : null;
-    const claudeChips = i && isClaude(w.pane) ? [
-      routerChip,
-      chip("sb-model", { icon: "claude", iconColor: CLAUDE_ORANGE, color: t.foreground, tip: i.model, onClick: claudeCard },
-        div().child(modelName(i.model)),
-        mid ? div().text_color(t.dim).child([i.effort, wide ? windowLabel(i.window) : null].filter(Boolean).join(" · ")) : null),
-      ...meters.map((m) => chip(`sb-m-${m.label}`, { onClick: claudeCard, tip: `${m.label}: ${m.percent}% used` },
-        div().text_color(t.dim).child(m.label), this.track(t, m.percent, this.meterColor(t, m.label, m.percent)), div().child(`${m.percent}%`))),
-    ].filter(Boolean) : [routerChip].filter(Boolean);
     return h_flex().id(NAME).size_full().px(14).gap(8).items_center().overflow_hidden().bg(t.chrome).text_size(12).text_color(t.muted)
       .on_size_change((size, cx) => { if (Math.abs(size.width - this.width) > 8) { this.width = size.width; cx.notify(); } })
-      .children(claudeChips)
       .child(div().flex_1().min_w(8))
       .children(gitChips);
   }

@@ -87,7 +87,7 @@
                 "pane": {
                   "header": {
                     "content": {
-                      "mod": "pane"
+                      "mod": "pane-icons"
                     },
                     "reveal": "always",
                     "height": 30,
