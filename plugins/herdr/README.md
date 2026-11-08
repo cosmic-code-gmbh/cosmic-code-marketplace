@@ -12,8 +12,8 @@ plugin herdr                               mods/tabs-run      top bar: tabs fold
                                       │                       helpers, shelves
                                       │    mods/spaces-icons  the Icon & color… popup
                                       │    mods/menu-icons    right-click menus (space, agent, terminal)
-                                      │    mods/pane-icons    pane header: program, folder, model · ctx
-                                      │    mods/session-bar-icons  bottom bar: git, Claude card
+                                      │    mods/pane-icons    pane header: program, folder, git, model · ctx
+                                      │    mods/session-bar-icons  Claude card and push / pull menu
                                       │    mods/workspace-chrome-icons  sidebar footer without its line
                                       │    layouts/main-filetree.json
   skill artifacts-refresh ──┐         │    settings.json, keys.json
@@ -33,18 +33,21 @@ to Herdr's theme format. Pick one in Settings → Theme. Rex draws selections in
 one selection color, so each theme's selection is its background mixed 30 % toward the
 foreground.
 
-## Pane header and bottom bar
+## Pane header
 
 `mods/pane-icons` is a copy of Herdr's `pane` header (Herdr replaces its own `pane` on start, so
-the layout points at the copy). A Claude Code pane shows its model · effort, a ctx bar and the
-percent on the right, each pane its own, so split panes keep theirs. A click opens the Claude
-card with every meter (ctx / 5h / 7d).
+the layout points at the copy). Each pane shows its own folder on the left and, on the right,
+its git (branch, ↑ ↓, changed files) and, in a Claude Code pane, model · effort with a ctx bar.
+Split panes keep their own. Clicks: the branch copies it, ↑ ↓ open a push / pull menu, changed
+files open filetree's Changed view, the model opens the Claude card with every meter
+(ctx / 5h / 7d). Git is read again after a cd, when a turn or command ends and when the repo
+changes.
 
-`mods/session-bar-icons` is a copy of `session-bar` from
-[cybertron288/herdr-mods](https://github.com/cybertron288/herdr-mods): the bottom bar keeps
-folder, branch and git chips on the right and draws the Claude card the header opens. The
-meters still come from session-bar's Claude Code plugin, so `install.sh` keeps installing
-`session-bar` too.
+The layout has no bottom bar, so the panes reach down to the window's margin.
+`mods/session-bar-icons` (a copy of `session-bar` from
+[cybertron288/herdr-mods](https://github.com/cybertron288/herdr-mods)) still draws the Claude
+card and the push / pull menu the header opens. The meters come from session-bar's Claude Code
+plugin, so `install.sh` keeps installing `session-bar` too.
 
 ## Tabs fold away
 

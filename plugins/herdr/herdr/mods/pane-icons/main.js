@@ -7,10 +7,55 @@
 // A Claude Code pane also shows its model · effort and context meter on the right, from
 // ~/.local/state/herdr-session-bar/<terminal>.json (session-bar's Claude Code plugin);
 // a click opens session-bar-icons' Claude card. The bottom bar no longer shows them.
+// On the right, this pane's git: branch (click copies), ↑ ↓ (click: session-bar-icons' push /
+// pull menu) and changed files (click: filetree's Changed view). Read again on a cd, when a
+// turn or command ends, and when the repo's files change.
 
 import { View, div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { panes, props, run, theme, home, readTextFile, watchFolder, openOverlay } from "herdr";
+import { panes, spaces, props, run, theme, home, readTextFile, watchFolder, openOverlay, exec, notify, layout, setShared } from "herdr";
+
+const READ = ["--no-optional-locks", "-c", "core.fsmonitor=false"];
+
+// `git status --porcelain=v1 -z -b` → branch, upstream, ahead / behind, changed files.
+function parseStatus(stdout) {
+  const g = { branch: null, upstream: "", ahead: 0, behind: 0, changed: 0, untracked: 0 };
+  for (const rec of stdout.split("\0")) {
+    if (rec.startsWith("## ")) {
+      const body = rec.slice(3);
+      g.branch = body.startsWith("HEAD (no branch)") ? "detached" : body.match(/^(?:No commits yet on |Initial commit on )?(.+?)(?:\.\.\.|\s|$)/)?.[1] ?? body;
+      g.upstream = body.match(/\.\.\.(\S+)/)?.[1] ?? "";
+      g.ahead = Number(body.match(/ahead (\d+)/)?.[1] ?? 0);
+      g.behind = Number(body.match(/behind (\d+)/)?.[1] ?? 0);
+      continue;
+    }
+    if (rec.length < 4) continue;
+    g.changed++;
+    if (rec.startsWith("??")) g.untracked++;
+  }
+  return g;
+}
+
+// Shows the layout block with `mod`: selects it in every stack on the way. False: no such block.
+function revealMod(mod) {
+  const path = [];
+  const walk = (n) => {
+    if (!n) return false;
+    path.push(n);
+    if (n.content?.mod === mod) return true;
+    for (const c of n.children ?? []) if (walk(c)) return true;
+    path.pop();
+    return false;
+  };
+  let found = false;
+  try { found = walk(layout()); } catch {}
+  if (!found) return false;
+  path.forEach((n, i) => {
+    if (n.type === "stack" && path[i + 1]?.id) run("layout.select", { stack: n.id, child: path[i + 1].id });
+    if (i > 0 && n.id) run("layout.show", { id: n.id });
+  });
+  return true;
+}
 
 const infoDir = () => `${home()}/.local/state/herdr-session-bar`;
 
@@ -47,6 +92,63 @@ export default class Pane extends View {
 
   me() {
     return panes().find((p) => p.pane === props()?.pane);
+  }
+
+  // This pane's repo, one look at a time; `again` when asked meanwhile.
+  readGit(cx) {
+    const p = this.me();
+    const cwd = p?.cwd;
+    const on = spaces().find((s) => (s.tabs ?? []).some((c) => c.id === p?.tab))?.machine ?? null;
+    if (!cwd) { this.git = null; return; }
+    if (this.loading) { this.again = true; return; }
+    const key = JSON.stringify([cwd, on]);
+    this.loading = true;
+    cx.spawn(async (cx) => {
+      try {
+        const g = (args) => exec("git", [...READ, ...args], { cwd, on });
+        const top = await g(["rev-parse", "--show-toplevel"]).catch(() => null);
+        if (top?.code !== 0) { if (this.gitKey === key) this.git = null; return; }
+        const status = await g(["status", "--porcelain=v1", "-z", "-b", "--untracked-files=normal"]);
+        if (this.gitKey !== key || status.code !== 0) return;
+        this.git = { ...parseStatus(status.stdout), top: top.stdout.trim(), cwd, on };
+        this.watchRepo(this.git.top, on, cx);
+      } catch { if (this.gitKey === key) this.git = null; }
+      finally {
+        this.loading = false;
+        if (this.again) { this.again = false; this.readGit(cx); }
+        cx.notify();
+      }
+    });
+  }
+
+  watchRepo(top, on, cx) {
+    if (on || this.watched === top) return;
+    this.watched = top;
+    cx.spawn(async (cx) => {
+      try { while (this.watched === top) { await watchFolder(top); if (this.watched === top) this.readGit(cx); } }
+      catch { if (this.watched === top) this.watched = null; }
+    });
+  }
+
+  // Branch, ↑ ↓ and changed files, small and quiet like the folder.
+  gitChips(t, pane) {
+    const g = this.git;
+    if (!g?.branch) return [];
+    const chip = (id, icon, color, tip, label, onClick) => h_flex().id(`${id}-${pane}`).flex_none().h(20).px(5).gap(4).items_center().rounded(5)
+      .text_size(11.5).text_color(color).tooltip(tip).cursor_pointer().hover((s) => s.bg(t.hover))
+      .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+      .on_click((_e, cx) => { cx.stop_propagation(); onClick(cx); })
+      .child(svg(`mods/pane-icons/${icon}.svg`).size(11).flex_none().text_color(color))
+      .child(div().max_w(160).truncate().child(label));
+    const gitMenu = () => openOverlay({ mod: "session-bar-icons", kind: "popup", width: 280, height: (g.ahead && g.behind ? 3 : 2) * 44 + 10, props: { popup: { kind: "git", git: g, info: null, router: null } } });
+    const changed = () => { setShared("filetree.view", { view: "changed", n: Date.now() }); if (!revealMod("filetree")) run("pane.split", { direction: "right", mod: "filetree" }); };
+    return [
+      chip("ph-branch", "git-branch", t.muted, g.upstream ? `Tracks ${g.upstream} · click to copy` : "Click to copy", g.branch,
+        (cx) => { cx.write_to_clipboard(g.branch); notify({ title: "Copied", body: g.branch, timeout: 1500 }); }),
+      g.ahead ? chip("ph-ahead", "arrow-up", t.ansi6, `${g.ahead} to push`, String(g.ahead), gitMenu) : null,
+      g.behind ? chip("ph-behind", "arrow-down", t.ansi4, `${g.behind} to pull`, String(g.behind), gitMenu) : null,
+      g.changed ? chip("ph-changed", "pencil", t.ansi11 ?? t.ansi3, `${g.changed} uncommitted (${g.untracked} untracked) · open Changed`, String(g.changed), changed) : null,
+    ].filter(Boolean);
   }
 
   readInfo(cx) {
@@ -104,6 +206,12 @@ export default class Pane extends View {
     // Another program in this pane now, or a new terminal: read again.
     const key = `${p.terminal}|${isClaude(p)}`;
     if (key !== this.infoKey) { this.infoKey = key; this.readInfo(cx); }
+    // A cd, or a turn / command that just ended (a checkout, a commit): look at git again.
+    const gitKey = JSON.stringify([p.cwd, p.tab]);
+    if (gitKey !== this.gitAt) { this.gitKey = JSON.stringify([p.cwd, spaces().find((s) => (s.tabs ?? []).some((c) => c.id === p.tab))?.machine ?? null]); this.gitAt = gitKey; this.git = null; this.readGit(cx); }
+    const busy = p.status === "working" || !(p.program?.shell || p.program?.agent);
+    if (this.busy && !busy) this.readGit(cx);
+    this.busy = busy;
     const name = ((p.program?.agent || p.program?.shell) && p.program.name) || p.title || p.program?.name || "shell";
     const pic = icon(p.program, 14, t.dim);
     const st = p.status;
@@ -123,6 +231,7 @@ export default class Pane extends View {
       .when(Boolean(pic), (el) => el.child(pic))
       .child(div().flex_none().truncate().max_w(260).font_medium().text_color(t.foreground).child(name))
       .child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(folder(p.cwd)))
+      .children(this.gitChips(t, pane))
       .when(isClaude(p) && Boolean(this.info?.model), (el) => el.child(this.claude(t, pane)))
       .when(st === "working", el => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)))
       .when(st === "blocked", el => el.child(div().flex_none().px(6).h(18).flex().items_center().rounded(5).bg(t.blocked + "26").text_size(10.5).font_semibold().text_color(t.blocked).child("Needs you")))
