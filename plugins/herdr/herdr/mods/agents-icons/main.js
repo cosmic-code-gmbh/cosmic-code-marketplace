@@ -8,16 +8,19 @@
 // Sorted "Space, then status", this list is also the space switcher (the main layout
 // has no Spaces list any more): every space gets a card whose header is drawn in the
 // space's color, with a thread of that color down its sections. A click on the header
-// selects the space, its chevron folds it (remembered), "+" starts a terminal or an
+// selects the space, its chevron folds it (remembered; folded, it moves to the bottom), "+" starts a terminal or an
 // agent there, right-click opens the space menu, dragging reorders, and an image or
 // .app dropped on it becomes its picture. Its second line is the git state (spacegit.js).
+// A space is its place (spacekeep.js): two spaces in one folder merge into one, and a place
+// whose space closed keeps a quiet card where it was, which opens it again.
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, watchFolder, exec, knownAgents, nextCommand, notify, machines } from "herdr";
+import { agents, terminals, panes, focused, spaces, run, theme, shared, setShared, setAgentOrder, openOverlay, closeOverlay, props, window, layout, watchFolder, exec, knownAgents, nextCommand, notify, machines, home } from "herdr";
 import { cliRuns, claudeSubagents, subagentDir } from "./hidden.js";
 import { SpaceGit, gitLine } from "./spacegit.js";
 import { setIcon, pickIcon } from "./icons.js";
+import { remember, dormant, forget, forgetFolder, reopen, Merger } from "./spacekeep.js";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -143,6 +146,7 @@ export default class Agents extends View {
     this.pressed = null;
     this.over = null;
     this.spaceGit = new SpaceGit();
+    this.merger = new Merger();
     cx.timer.every(1000, (cx) => this.spaceGit.tick(cx));
     // Commands from popups:
     // "agents-icons.icon:<id>": "Choose image…" in spaces-icons' popup (the popup's own
@@ -155,6 +159,9 @@ export default class Agents extends View {
         const c = await nextCommand();
         const shelfCmd = /^shelf:(agents\.followUp|agents\.archive):(on|off):(.+)$/.exec(c);
         if (shelfCmd) { setShelf(shelfCmd[1], shelfCmd[3], shelfCmd[2] === "on"); cx.notify(); continue; }
+        // "agents-icons.forget:<folder>": a closed place's card goes (as its "x").
+        const forgetCmd = /^forget:(.+)$/.exec(c);
+        if (forgetCmd) { forgetFolder(forgetCmd[1]); cx.notify(); continue; }
         const [, id] = /^icon:(.+)$/.exec(c) ?? [];
         try {
           const s = id && spaces().find((x) => x.id === id);
@@ -373,7 +380,7 @@ export default class Agents extends View {
   // The "+" popup of a space header: like new-menu (Terminal, then the installed agents),
   // but it starts the tab in that space, not in the one open right now.
   initNewMenu(cx) {
-    const machine = spaces().find((s) => s.id === props().space)?.machine;
+    const machine = props().kept ? props().kept.machine : spaces().find((s) => s.id === props().space)?.machine;
     const where = machine ?? "";
     this.agentsKnown = shared(KNOWN)?.[where] ?? [];
     cx.spawn(async (cx) => {
@@ -389,7 +396,9 @@ export default class Agents extends View {
     const space = props().space;
     const start = (args) => {
       closeOverlay(props().overlay);
-      run("tab.new", { space, ...args });
+      // A closed place: open it again, with the agent as its first tab.
+      if (props().kept) reopen(props().kept, args);
+      else run("tab.new", { space, ...args });
     };
     const item = (id, pic, name, onClick) => h_flex()
       .id(id).h(31).px(8).gap(9).rounded(7).items_center().flex_none()
@@ -662,20 +671,27 @@ export default class Agents extends View {
       if (detail.get(a.address) == null && seen[`${a.space_name}\u0000`] > 1) detail.set(a.address, label(a));
     }
 
-    const spaceIcons = shared("space.icons") ?? {};
-    const spaceColors = this.assignColors();
-    const spaceGlyphs = shared("space.glyphs") ?? {};
+    // Each space's place; remembered, and a place that came back gets its look again.
+    const allSpaces = spaces();
+    const placeKeys = new Map(allSpaces.map((s) => [s.id, this.spaceGit.keyOf(s, ps, home())]));
+    const look = remember(allSpaces, placeKeys, { colors: this.assignColors(), icons: shared("space.icons") ?? {}, glyphs: shared("space.glyphs") ?? {} });
+    this.merger.check(allSpaces, placeKeys, cx);
+    const spaceIcons = look.icons;
+    const spaceColors = look.colors;
+    const spaceGlyphs = look.glyphs;
     // The space's picture, else its generic icon or letter on its color (as spaces-icons draws it).
     // A space's color as #rrggbb (stored as a palette name or as hex).
     const spaceHex = (id) => {
-      const c = spaceColors[id] ?? "ansi6";
+      const c = spaceColors[id] ?? this.dormantLook?.[id]?.color ?? "ansi6";
       return (c.startsWith("#") ? c : (MARK[c] ?? t[c] ?? t.accent)).slice(0, 7);
     };
     const spacePic = (a, size) => {
       const radius = Math.round(size * 0.28);
-      if (spaceIcons[a.space]) return image(spaceIcons[a.space]).w(size).h(size).flex_none().rounded(radius);
+      const pic = spaceIcons[a.space] ?? this.dormantLook?.[a.space]?.icon;
+      if (pic) return image(pic).w(size).h(size).flex_none().rounded(radius);
       // Only our duotone set (duo-*); an earlier icon name falls back to the letter.
-      const glyph = /^duo-/.test(spaceGlyphs[a.space] ?? "") ? spaceGlyphs[a.space] : null;
+      const g = spaceGlyphs[a.space] ?? this.dormantLook?.[a.space]?.glyph ?? "";
+      const glyph = /^duo-/.test(g) ? g : null;
       return h_flex().size(size).flex_none().rounded(radius).bg(spaceHex(a.space)).items_center().justify_center()
         .child(glyph
           ? svg(`mods/spaces-icons/glyphs/${glyph}.svg`).size(Math.round(size * 0.8)).text_color("#ffffff")
@@ -951,6 +967,56 @@ export default class Agents extends View {
           .child(btn(`fold-${g.id}`, open ? "Fold" : "Unfold", `mods/workspace-chrome/chevron-${open ? "down" : "right"}.svg`, (cx) => { this.toggleFold(g.id); cx.notify(); }))));
     };
 
+    // Places whose space closed (spacekeep.js), by space and status only, and only on this
+    // computer or a connected machine. Their pictures go by "kept:<key>".
+    const liveKeys = new Set([...placeKeys.values()].filter(Boolean));
+    const asleep = bySpaceStatus ? dormant(liveKeys).filter((d) => !d.machine || connected.includes(d.machine)) : [];
+    this.dormantLook = Object.fromEntries(asleep.map((d) => [`kept:${d.key}`, d]));
+    // A closed place: a quiet row where its card was. A click opens it again in its folder,
+    // "+" opens it with an agent, "x" forgets it.
+    const dormantCard = (d) => {
+      const id = `kept-${d.machine ?? ""}-${d.folder}`;
+      const hovered = this.hoveredHeader === id;
+      const btn = (bid, tip, icon, onClick) => div().id(bid).flex_none().size(24).rounded(6)
+        .flex().items_center().justify_center().text_color(t.dim).cursor_pointer()
+        .hover((st) => st.bg(t.foreground + "1f").text_color(t.foreground))
+        .tooltip(tip)
+        .on_click((_e, cx) => { cx.stop_propagation(); onClick(cx); })
+        .child(svg(icon).size(13));
+      return h_flex().id(id).relative().h(34).flex_none().pl(10).pr(4).gap(9).items_center().rounded(11)
+        .cursor_pointer().hover((st) => st.bg(t.hover))
+        .on_hover((on, cx) => {
+          if (on) this.hoveredHeader = id;
+          else if (this.hoveredHeader === id) this.hoveredHeader = null;
+          cx.notify();
+        })
+        .on_click(() => reopen(d))
+        .child(div().opacity(0.5).child(spacePic({ space: `kept:${d.key}`, space_name: d.name }, 20)))
+        .child(div().flex_1().min_w(0).truncate().text_size(13.5).text_color(t.dim).child(d.name))
+        .when(Boolean(d.machine), (el) => el.child(div().flex_none().text_size(10).text_color(t.dim).child(d.machine)))
+        .when(hovered, (el) => el.child(h_flex().flex_none().gap(0)
+          .child(btn(`${id}-new`, `Open ${d.name} with a terminal or agent`, "mods/workspace-chrome/plus.svg",
+            () => openOverlay({ mod: "agents-icons", kind: "popup", width: 250, height: 420, props: { newMenu: true, kept: d, spaceName: d.name } })))
+          .child(btn(`${id}-forget`, `Remove ${d.name} from the list`, "mods/workspace-chrome/x.svg", (cx) => { forget(d.key); this.hoveredHeader = null; cx.notify(); }))));
+    };
+    // Puts each closed place after the live card it followed; before the first card when
+    // it led, at the end when what it followed isn't shown.
+    const withDormant = (list) => {
+      if (!asleep.length) return list;
+      const res = [];
+      const placed = new Set();
+      const put = (ds) => { for (const d of ds) if (!placed.has(d.key)) { placed.add(d.key); res.push({ dormant: d }); } };
+      let led = false;
+      for (const c of list) {
+        if (!led && c.card === true) { put(asleep.filter((d) => !d.after)); led = true; }
+        res.push(c);
+        const k = c.card === true ? placeKeys.get(c.space) : null;
+        if (k) put(asleep.filter((d) => d.after === k));
+      }
+      put(asleep);
+      return res;
+    };
+
     // A group's header; it folds the group. Folded, it says how many and the most urgent state.
     // Inside a space card the sections read as small labels.
     const header = (g) => {
@@ -1034,11 +1100,20 @@ export default class Agents extends View {
       // while it is connected; this computer's spaces keep their place after Pinned.
       const remote = (c) => c.card === true && Boolean(machineOf(c.space));
       const top = connected.flatMap((m) => [m, ...out.filter((c) => remote(c) && machineOf(c.space) === m)]);
-      const shown = [...top, ...out.filter((c) => !remote(c))];
+      // Folded spaces of this computer leave the list for the bottom, just above the
+      // settings: out of the way, and back in their place once unfolded.
+      const all = [...top, ...withDormant(out.filter((c) => !remote(c)))];
+      const down = (c) => c.card === true && !remote(c) && this.isFolded(c.id);
+      return { rows: draw(all.filter((c) => !down(c))), folded: draw(all.filter(down), 6) };
+    };
+    // gap: the room between two cards (12 in the list; folded ones at the bottom sit closer).
+    const draw = (shown, gap = 12) => {
       return shown.map((c, i) => (typeof c === "string"
         ? machineHead(c, i)
+        : c.dormant
+        ? div().flex_none().mt(i && typeof shown[i - 1] !== "string" ? (shown[i - 1]?.dormant ? 2 : 12) : 2).child(dormantCard(c.dormant))
         : c.card === true
-        ? v_flex().id(`space-${c.id}`).flex_none().mt(i && typeof shown[i - 1] !== "string" ? 12 : 2)
+        ? v_flex().id(`space-${c.id}`).flex_none().mt(i && typeof shown[i - 1] !== "string" ? gap : 2)
           .children(c.head)
           .when(c.items.length > 0, (el) => {
             // The picture is 26 px wide at 7 px in: the 2 px thread runs under its middle.
@@ -1064,9 +1139,13 @@ export default class Agents extends View {
       .on_click(() => run("space.select", { id: s.id }))
       .child(spacePic({ space: s.id, space_name: s.name }, 18)))
       .concat(railOrder.length ? [div().h(1).mx(8).my(4).flex_none().bg(t.border)] : []);
+    const carded = !collapsed && bySpaceStatus ? cards() : null;
     const rows = collapsed
       ? [...railSpaces(), ...list.flatMap(withKids)]
-      : bySpaceStatus ? cards() : [...groups.flatMap(groupRows), ...this.terminalRows(t)];
+      : carded ? carded.rows : [...groups.flatMap(groupRows), ...this.terminalRows(t)];
+    const folded = carded?.folded ?? [];
+    // A drag that ends outside a space header drops nothing.
+    const dropNothing = (_e, cx) => { if (this.pressed !== null) { this.pressed = null; this.over = null; cx.notify(); } };
     const topBtn = (id, tip, icon, onClick) => div().id(id).size(24).flex_none().flex().items_center().justify_center().rounded(6)
       .text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground))
       .tooltip(tip).on_click(onClick).child(svg(icon).size(14));
@@ -1093,13 +1172,17 @@ export default class Agents extends View {
             .child(topBtn("space-new", "New space", "mods/workspace-chrome/plus.svg", () => run("space.new"))),
         ),
       )
-      .when(list.length === 0 && !collapsed && rows.length === 0, (el) =>
+      .when(list.length === 0 && !collapsed && rows.length === 0 && folded.length === 0, (el) =>
         el.child(div().px(12).text_size(12).text_color(t.dim).child("No agent status yet. Agents show up here when they report their status. Older versions and agents inside tmux may not.")),
       )
       .child(v_flex().id("ag-list").flex_1().min_h(0).px(collapsed ? 0 : 8).pb(14).overflow_y_scrollbar().mode("always")
-        // A drag that ends outside a space header drops nothing.
-        .on_mouse_up("left", (_e, cx) => { if (this.pressed !== null) { this.pressed = null; this.over = null; cx.notify(); } })
+        .on_mouse_up("left", dropNothing)
         .children(rows))
+      // The folded spaces, at the bottom right above the settings, as tall as they are (a
+      // scroll area here kept its full height and left a gap); many of them shrink the list.
+      .when(folded.length > 0, (el) => el.child(v_flex().id("ag-folded").flex_none().px(8).pt(6).pb(4)
+        .on_mouse_up("left", dropNothing)
+        .children(folded)))
       .when(collapsed, (el) =>
         el.child(
           h_flex()

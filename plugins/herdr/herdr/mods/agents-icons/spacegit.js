@@ -34,6 +34,17 @@ export class SpaceGit {
     return this.git[where(s, ps)] ?? null;
   }
 
+  // Which place a space stands for (spacekeep.js): its machine and its repo's top (a worktree
+  // has its own top), else the folder its first terminal is in. Null until git has answered
+  // for that place, and at home (a scratch space, not a project).
+  keyOf(s, ps, home) {
+    const k = where(s, ps);
+    if (!(k in this.git)) return null;
+    const dir = (this.git[k]?.top || place(s, ps) || "").replace(/\/+$/, "");
+    if (!dir || dir === home.replace(/\/+$/, "")) return null;
+    return JSON.stringify([s.machine ?? null, dir]);
+  }
+
   tick(cx) {
     const due = this.due(Date.now(), spaces(), panes());
     if (due.size) this.refresh(due, cx);
@@ -112,7 +123,7 @@ export class SpaceGit {
       const common = await exec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd, on });
       const repo = common.stdout.trim();
       const name = repo.endsWith("/.git") ? base(repo.slice(0, -5)) : base(repo).replace(/\.git$/, "");
-      const info = { name, branch: null, ahead: 0, behind: 0, repo: JSON.stringify([on, repo]), linked: repo !== `${top.stdout.trim()}/.git` };
+      const info = { name, branch: null, ahead: 0, behind: 0, repo: JSON.stringify([on, repo]), top: top.stdout.trim(), linked: repo !== `${top.stdout.trim()}/.git` };
       for (const line of r.stdout.split("\n")) {
         if (line.startsWith("# branch.head ")) info.branch = line.slice(14);
         else if (line.startsWith("# branch.ab ")) {

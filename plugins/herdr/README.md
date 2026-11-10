@@ -142,6 +142,8 @@ they are connected, then Pinned, then this computer's spaces.
 
 - Click the header: select the space. Chevron: fold it (remembered). Folded, it shows no counts,
   only one mark for its most urgent agent that is waiting, done or working.
+- A folded space moves to the bottom of the list, just above the settings, out of the way;
+  unfolded, it goes back to its place. A new tab in it unfolds it (and brings it back up).
 - "+" and the fold chevron show on hover, side by side; an agent's sub-agent chevron too
   (folded, it stays with its count).
 - The shown panes' frames, 2 px, take the selected space's color (faint, full when focused):
@@ -157,6 +159,23 @@ they are connected, then Pinned, then this computer's spaces.
 - The selected agent or terminal: its space's color behind it, the name in bold, and a
   branch from the card's thread to the row, as in a file tree; its sub-agents' lines take the
   space's color too. Hover stays grey.
+
+**One space per place, and places stay** (mods/agents-icons/spacekeep.js). A space is its
+place: its machine plus the repo top of its first terminal (a worktree has its own), else
+that terminal's folder. Spaces at `~` don't count.
+
+```
+live spaces ──▶ shared "spaces.kept" / "spaces.order"  (name, folder, color, icon, slot)
+   ├─ two spaces, one place ──▶ the newer one's terminals move into the older one
+   └─ a place whose space closed ──▶ a quiet row in its old slot; click opens it again
+```
+
+- Merging: Herdr has no "move tab to space", so the terminals are parked (they keep running),
+  the target space is shown, and `terminal.keep` gives each a pane there (it opens a tab in the
+  *shown* space, whatever the labels say). Named tabs keep their names. A space named
+  differently, one with a mod pane, or one on another machine stays as it is.
+- Closed places: click opens a space in its folder with its old name, color and icon; "+"
+  opens it with an agent; "x" forgets it (`herdr-app do agents-icons.forget:<folder>` too).
 
 **Right-click menus** (mods/menu-icons): an agent row has Rename, Pin, Follow up, Archive and
 Close; a terminal row Rename, Split right, Split down and Close.
