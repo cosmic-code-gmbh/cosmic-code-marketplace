@@ -142,8 +142,8 @@ they are connected, then Pinned, then this computer's spaces.
 
 - Click the header: select the space. Chevron: fold it (remembered). Folded, it shows no counts,
   only one mark for its most urgent agent that is waiting, done or working.
-- A folded space moves to the bottom of the list, just above the settings, out of the way;
-  unfolded, it goes back to its place. A new tab in it unfolds it (and brings it back up).
+- A folded space moves to the bottom of the list, just above the settings, out of the way,
+  with the closed places under it; unfolded (or opened again), it goes back to its place. A new tab in it unfolds it (and brings it back up).
 - "+" and the fold chevron show on hover, side by side; an agent's sub-agent chevron too
   (folded, it stays with its count).
 - The shown panes' frames, 2 px, take the selected space's color (faint, full when focused):
@@ -167,7 +167,7 @@ that terminal's folder. Spaces at `~` don't count.
 ```
 live spaces ──▶ shared "spaces.kept" / "spaces.order"  (name, folder, color, icon, slot)
    ├─ two spaces, one place ──▶ the newer one's terminals move into the older one
-   └─ a place whose space closed ──▶ a quiet row in its old slot; click opens it again
+   └─ a place whose space closed ──▶ a quiet row at the bottom; click opens it again
 ```
 
 - Merging: Herdr has no "move tab to space", so the terminals are parked (they keep running),

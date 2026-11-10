@@ -12,7 +12,7 @@
 // agent there, right-click opens the space menu, dragging reorders, and an image or
 // .app dropped on it becomes its picture. Its second line is the git state (spacegit.js).
 // A space is its place (spacekeep.js): two spaces in one folder merge into one, and a place
-// whose space closed keeps a quiet card where it was, which opens it again.
+// whose space closed keeps a quiet row at the bottom, which opens it again.
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
@@ -1101,17 +1101,21 @@ export default class Agents extends View {
       const remote = (c) => c.card === true && Boolean(machineOf(c.space));
       const top = connected.flatMap((m) => [m, ...out.filter((c) => remote(c) && machineOf(c.space) === m)]);
       // Folded spaces of this computer leave the list for the bottom, just above the
-      // settings: out of the way, and back in their place once unfolded.
+      // settings, and under them the closed places: out of the way. Unfolded or opened
+      // again, a space is back in its place.
       const all = [...top, ...withDormant(out.filter((c) => !remote(c)))];
       const down = (c) => c.card === true && !remote(c) && this.isFolded(c.id);
-      return { rows: draw(all.filter((c) => !down(c))), folded: draw(all.filter(down), 6) };
+      return {
+        rows: draw(all.filter((c) => !down(c) && !c.dormant)),
+        folded: draw([...all.filter(down), ...all.filter((c) => c.dormant)], 6),
+      };
     };
     // gap: the room between two cards (12 in the list; folded ones at the bottom sit closer).
     const draw = (shown, gap = 12) => {
       return shown.map((c, i) => (typeof c === "string"
         ? machineHead(c, i)
         : c.dormant
-        ? div().flex_none().mt(i && typeof shown[i - 1] !== "string" ? (shown[i - 1]?.dormant ? 2 : 12) : 2).child(dormantCard(c.dormant))
+        ? div().flex_none().mt(i && typeof shown[i - 1] !== "string" ? (shown[i - 1]?.dormant ? 2 : gap) : 2).child(dormantCard(c.dormant))
         : c.card === true
         ? v_flex().id(`space-${c.id}`).flex_none().mt(i && typeof shown[i - 1] !== "string" ? gap : 2)
           .children(c.head)

@@ -8,7 +8,7 @@
 //        ├─ two live spaces, one place ──Merger──▶ the newer one's terminals move into
 //        │    the older one (park, show it, keep), and the empty one closes
 //        │
-//        └─ a kept place without a live space ──dormant()──▶ a quiet card in its old spot;
+//        └─ a kept place without a live space ──dormant()──▶ a quiet row at the bottom;
 //             a click opens it again (space.new in its folder) with its name, color and icon
 //
 // Only this computer's spaces merge; another machine's labels have their own ids.
@@ -54,7 +54,8 @@ export function remember(sp, keys, look) {
   }
   if (JSON.stringify(next) !== JSON.stringify(before)) setShared(KEPT, next);
 
-  // Live places keep the order Herdr has; a closed one keeps its slot between them.
+  // Live places keep the order Herdr has; a closed one keeps its slot between them (the
+  // closed rows at the bottom come in that order).
   const live = [...new Set(sp.map((s) => keys.get(s.id)).filter(Boolean))];
   const liveSet = new Set(live);
   const queue = [...live];
