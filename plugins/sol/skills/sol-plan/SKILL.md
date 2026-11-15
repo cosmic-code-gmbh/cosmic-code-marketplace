@@ -29,6 +29,12 @@ nur in sein eigenes Arbeitsverzeichnis, kann also Tests laufen lassen
 (`vitest --configLoader runner`, `tsc --incremental false`). Kein Sol erreichbar:
 melden, kein Ersatzmodell.
 
+Jeden Brief als Datei im Scratchpad ablegen, bevor Sol startet, und Sols Antwort
+daneben: `sol<plan|verify>-<plan>-<runde>-brief.txt` und `sol<plan|verify>-<plan>-<runde>.txt`
+(Runde `r1`, `r2`, …, Schlusslauf `sl1`, `sl2`). Der Brief geht per `< brief.txt` an
+Sol. So bleibt der Brief von Runde 1 für die Schlussläufe erhalten, auch nach einer
+Kontext-Zusammenfassung.
+
 Prüfregeln sind die SKILL.md-Dateien des `workflow`-Plugins aus demselben
 Marketplace. Pfad auflösen mit
 `ls -d ~/.claude/plugins/cache/cosmic-code-marketplace/workflow/*/skills/<skill>/SKILL.md | sort -V | tail -1`
@@ -59,7 +65,8 @@ Schlusslauf 2/2  ├─ nichts Neues        ──► fertig
                  └─ neue Befunde        ──► STOPP: einarbeiten, Stand an Marcus, kein weiterer Lauf
 ```
 
-- Gleicher Brief wie Runde 1, plus: „Schlussprüfung N von 2: alles prüfen, nicht nur
+- Gleicher Brief wie Runde 1 (aus `…-r1-brief.txt` kopiert, Prüfergebnisse
+  aktualisiert), plus: „Schlussprüfung N von 2: alles prüfen, nicht nur
   Änderungen. Frühere Runden kennst du nicht.“ Die Zahl steht im Brief, damit sie
   bei jedem Lauf im Kontext ist.
 - Nur wenn Runde 1 schon das Endergebnis war (APPROVE bzw. `vollständig` ohne
