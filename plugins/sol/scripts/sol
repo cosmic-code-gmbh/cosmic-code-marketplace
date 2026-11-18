@@ -33,7 +33,14 @@ args=(--json -o "$out" -c "model_reasoning_effort=\"$effort\"" -c 'sandbox_mode=
 
 brief() {
   echo "Repository (read-only for you): $repo — run commands there with \`cd $repo && …\`. Writable scratch: $work (TMPDIR)."
-  echo "Tests work: vitest with \`--configLoader runner\`, tsc with \`--incremental false\` (anything else writing into the repo fails)."
+  # A repo with a `check` script (e.g. published) serializes heavy runs machine-wide and
+  # caps their parallelism; Sol running tsc/vitest on its own beside it overloads the
+  # machine. Point Sol at that script instead of the raw tools.
+  if grep -q '"check"[[:space:]]*:' "$repo/package.json" 2>/dev/null; then
+    echo "Tests: only through \`bun run check\` (optionally with package dir names, e.g. \`bun run check core web\`). It waits for other sessions' runs and limits parallelism — never start tsc or vitest yourself, and never several checks at once."
+  else
+    echo "Tests work: vitest with \`--configLoader runner\`, tsc with \`--incremental false\` (anything else writing into the repo fails)."
+  fi
   echo
   cat
 }

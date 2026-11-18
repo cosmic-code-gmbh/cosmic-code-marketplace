@@ -26,7 +26,8 @@ pollen. Jede Runde ist ein neuer Thread (kein `--resume`): ein fortgesetzter Thr
 schleppt den ganzen Verlauf mit und kostet pro Runde Millionen Tokens; der
 Delta-Brief trägt stattdessen das Nötige als Text. Sol liest das Repo und schreibt
 nur in sein eigenes Arbeitsverzeichnis, kann also Tests laufen lassen
-(`vitest --configLoader runner`, `tsc --incremental false`). Kein Sol erreichbar:
+(`vitest --configLoader runner`, `tsc --incremental false`; hat das Repo ein
+`check`-Script, nur darüber, das sagt `scripts/sol` Sol selbst). Kein Sol erreichbar:
 melden, kein Ersatzmodell.
 
 Jeden Brief als Datei im Scratchpad ablegen, bevor Sol startet, und Sols Antwort
